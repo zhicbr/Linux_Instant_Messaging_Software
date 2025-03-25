@@ -1,0 +1,35 @@
+# 构建产物
+build/
+build-*/
+*.o
+*.a
+*.so
+*.exe
+
+# CMake 相关
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# Qt Creator 相关
+CMakeLists.txt.user
+*.qmake.stash
+*.pro.user
+.qtcreator/
+
+# 运行时生成的文件
+ChatServer/users.db
+
+# 临时文件
+*.swp
+*~
+.DS_Store
+
+# IDE 相关
+.idea/
+.vscode/
+
+# Docker 相关（可选）
+Dockerfile.lock
+*.dockerignore
