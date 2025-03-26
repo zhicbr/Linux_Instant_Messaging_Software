@@ -13,7 +13,12 @@ find_package(Qt6 COMPONENTS Core Gui Network Widgets REQUIRED)
 add_executable(ChatClient
     src/main.cpp
     src/chatwindow.cpp
+    src/chatwindow.h
+    ui/chatwindow.ui
     ../Common/messageprotocol.cpp
+    ../Common/messageprotocol.h
+    ../Common/config.h
+    ../Common/utils.h
 )
 
 target_include_directories(ChatClient PRIVATE ../Common)

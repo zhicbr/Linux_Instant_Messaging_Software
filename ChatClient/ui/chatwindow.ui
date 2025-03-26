@@ -6,57 +6,354 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>600</width>
-    <height>400</height>
+    <width>900</width>
+    <height>0</height>
    </rect>
   </property>
   <property name="windowTitle">
-   <string>Chat Window</string>
+   <string>Chat App</string>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">QMainWindow { background: #f5f7fa; }</string>
   </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <item>
-     <layout class="QHBoxLayout" name="horizontalLayout">
-      <item>
-       <widget class="QLineEdit" name="usernameEdit">
-        <property name="placeholderText">
-         <string>Enter your username</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QPushButton" name="loginButton">
-        <property name="text">
-         <string>Login</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </item>
-    <item>
-     <widget class="QTextEdit" name="chatDisplay">
-      <property name="readOnly">
-       <bool>true</bool>
-      </property>
+     <widget class="QStackedWidget" name="stackedWidget">
+      <!-- 登录/注册页面 -->
+      <widget class="QWidget" name="authPage">
+       <layout class="QVBoxLayout" name="authVerticalLayout">
+        <item>
+         <spacer name="verticalSpacerTop">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>40</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item alignment="Qt::AlignCenter">
+         <widget class="QLabel" name="authTitleLabel">
+          <property name="text">
+           <string>Chat App</string>
+          </property>
+          <property name="styleSheet">
+           <string notr="true">font-size: 36px; font-weight: bold; color: #2c3e50; font-family: 'Segoe UI', sans-serif;</string>
+          </property>
+         </widget>
+        </item>
+        <item alignment="Qt::AlignCenter">
+         <widget class="QWidget" name="authContainer">
+          <property name="minimumSize">
+           <size>
+            <width>400</width>
+            <height>0</height>
+           </size>
+          </property>
+          <property name="styleSheet">
+           <string notr="true">background: white; border-radius: 12px; padding: 40px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);</string>
+          </property>
+          <layout class="QVBoxLayout" name="authContainerLayout">
+           <item>
+            <layout class="QHBoxLayout" name="authHeaderLayout">
+             <item>
+              <widget class="QPushButton" name="showLoginButton">
+               <property name="text">
+                <string>Sign In</string>
+               </property>
+               <property name="styleSheet">
+                <string notr="true">color: #3498db; font-size: 18px; font-weight: 600; font-family: 'Segoe UI', sans-serif; background: transparent; border: none; padding: 8px 16px; border-radius: 6px;</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="showRegisterButton">
+               <property name="text">
+                <string>Sign Up</string>
+               </property>
+               <property name="styleSheet">
+                <string notr="true">color: #7f8c8d; font-size: 18px; font-weight: 600; font-family: 'Segoe UI', sans-serif; background: transparent; border: none; padding: 8px 16px; border-radius: 6px;</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <widget class="QStackedWidget" name="authStackedWidget">
+             <!-- 登录页面 -->
+             <widget class="QWidget" name="loginPage">
+              <layout class="QVBoxLayout" name="loginVerticalLayout">
+               <item>
+                <widget class="QLabel" name="loginNicknameLabel">
+                 <property name="text">
+                  <string>Username</string>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">font-size: 14px; color: #7f8c8d; font-family: 'Segoe UI', sans-serif;</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLineEdit" name="loginNicknameEdit">
+                 <property name="placeholderText">
+                  <string>Enter your username</string>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">padding: 12px 15px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 16px; background: white; color: #2c3e50; font-family: 'Segoe UI', sans-serif;</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="verticalSpacer_1">
+                 <property name="orientation">
+                  <enum>Qt::Vertical</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>20</width>
+                   <height>15</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+               <item>
+                <widget class="QLabel" name="loginPasswordLabel">
+                 <property name="text">
+                  <string>Password</string>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">font-size: 14px; color: #7f8c8d; font-family: 'Segoe UI', sans-serif;</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLineEdit" name="loginPasswordEdit">
+                 <property name="echoMode">
+                  <enum>QLineEdit::Password</enum>
+                 </property>
+                 <property name="placeholderText">
+                  <string>Enter your password</string>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">padding: 12px 15px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 16px; background: white; color: #2c3e50; font-family: 'Segoe UI', sans-serif;</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="verticalSpacer_2">
+                 <property name="orientation">
+                  <enum>Qt::Vertical</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>20</width>
+                   <height>10</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+               <item alignment="Qt::AlignRight">
+                <widget class="QPushButton" name="forgotPasswordButton">
+                 <property name="text">
+                  <string>Forgot password?</string>
+                 </property>
+                 <property name="flat">
+                  <bool>true</bool>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">color: #7f8c8d; font-size: 12px; font-family: 'Segoe UI', sans-serif; background: transparent; border: none;</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+             <!-- 注册页面 -->
+             <widget class="QWidget" name="registerPage">
+              <layout class="QVBoxLayout" name="registerVerticalLayout">
+               <item>
+                <widget class="QLabel" name="emailLabel">
+                 <property name="text">
+                  <string>Email</string>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">font-size: 14px; color: #7f8c8d; font-family: 'Segoe UI', sans-serif;</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLineEdit" name="emailEdit">
+                 <property name="placeholderText">
+                  <string>Enter your email</string>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">padding: 12px 15px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 16px; background: white; color: #2c3e50; font-family: 'Segoe UI', sans-serif;</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="verticalSpacer_3">
+                 <property name="orientation">
+                  <enum>Qt::Vertical</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>20</width>
+                   <height>15</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+               <item>
+                <widget class="QLabel" name="nicknameLabel">
+                 <property name="text">
+                  <string>Username</string>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">font-size: 14px; color: #7f8c8d; font-family: 'Segoe UI', sans-serif;</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLineEdit" name="nicknameEdit">
+                 <property name="placeholderText">
+                  <string>Choose a username</string>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">padding: 12px 15px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 16px; background: white; color: #2c3e50; font-family: 'Segoe UI', sans-serif;</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="verticalSpacer_4">
+                 <property name="orientation">
+                  <enum>Qt::Vertical</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>20</width>
+                   <height>15</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+               <item>
+                <widget class="QLabel" name="passwordLabel">
+                 <property name="text">
+                  <string>Password</string>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">font-size: 14px; color: #7f8c8d; font-family: 'Segoe UI', sans-serif;</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLineEdit" name="passwordEdit">
+                 <property name="echoMode">
+                  <enum>QLineEdit::Password</enum>
+                 </property>
+                 <property name="placeholderText">
+                  <string>Create a password</string>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">padding: 12px 15px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 16px; background: white; color: #2c3e50; font-family: 'Segoe UI', sans-serif;</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </widget>
+           </item>
+           <item>
+            <spacer name="verticalSpacerAuthButton">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>20</width>
+               <height>20</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+           <item alignment="Qt::AlignCenter">
+            <widget class="QPushButton" name="authButton">
+             <property name="text">
+              <string>Sign In</string>
+             </property>
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>50</height>
+              </size>
+             </property>
+             <property name="styleSheet">
+              <string notr="true">padding: 12px; background: #3498db; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; font-family: 'Segoe UI', sans-serif;</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <spacer name="verticalSpacerBottom">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>40</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </widget>
+      <!-- 聊天页面 -->
+      <widget class="QWidget" name="chatPage">
+       <layout class="QVBoxLayout" name="chatVerticalLayout">
+        <item>
+         <widget class="QTextEdit" name="chatDisplay">
+          <property name="readOnly">
+           <bool>true</bool>
+          </property>
+          <property name="styleSheet">
+           <string notr="true">border: none; border-radius: 10px; padding: 10px; font-size: 16px; background: rgba(255, 255, 255, 0.9); color: #2c3e50; font-family: 'Segoe UI', sans-serif; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="messageHorizontalLayout">
+          <item>
+           <widget class="QLineEdit" name="messageEdit">
+            <property name="placeholderText">
+             <string>Type a message...</string>
+            </property>
+            <property name="styleSheet">
+             <string notr="true">padding: 12px; border: none; border-radius: 8px; font-size: 16px; background: #ecf0f1; color: #2c3e50; font-family: 'Segoe UI', sans-serif; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="sendButton">
+            <property name="text">
+             <string>Send</string>
+            </property>
+            <property name="styleSheet">
+             <string notr="true">padding: 12px; background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3498db, stop:1 #2980b9); color: white; border: none; border-radius: 8px; font-size: 16px; font-family: 'Segoe UI', sans-serif;</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
      </widget>
-    </item>
-    <item>
-     <layout class="QHBoxLayout" name="horizontalLayout_2">
-      <item>
-       <widget class="QLineEdit" name="messageEdit">
-        <property name="placeholderText">
-         <string>Type your message here</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QPushButton" name="sendButton">
-        <property name="text">
-         <string>Send</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
     </item>
    </layout>
   </widget>
@@ -65,8 +362,8 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>600</width>
-     <height>22</height>
+     <width>900</width>
+     <height>27</height>
     </rect>
    </property>
   </widget>
