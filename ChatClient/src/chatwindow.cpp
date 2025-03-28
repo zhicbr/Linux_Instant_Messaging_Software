@@ -19,11 +19,35 @@ ChatWindow::ChatWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::ChatWi
     // 初始化时显示登录页面
     ui->stackedWidget->setCurrentWidget(ui->authPage);
     ui->authStackedWidget->setCurrentWidget(ui->loginPage);
-    ui->authButton->setText("Login");
+    ui->authButton->setText("Sign In");
     isLoginMode = true;
+    ui->showLoginButton->setChecked(true);
+    ui->showRegisterButton->setChecked(false);
 
     // 初始化时禁用发送按钮
     ui->sendButton->setEnabled(false);
+
+    // 添加阴影效果
+    authShadow = new QGraphicsDropShadowEffect(this);
+    authShadow->setBlurRadius(10);
+    authShadow->setXOffset(0);
+    authShadow->setYOffset(2);
+    authShadow->setColor(QColor(0, 0, 0, 60)); // Subtle gray shadow
+    ui->authContainer->setGraphicsEffect(authShadow);
+
+    chatShadow = new QGraphicsDropShadowEffect(this);
+    chatShadow->setBlurRadius(10);
+    chatShadow->setXOffset(0);
+    chatShadow->setYOffset(2);
+    chatShadow->setColor(QColor(0, 0, 0, 60));
+    ui->chatDisplay->setGraphicsEffect(chatShadow);
+
+    inputShadow = new QGraphicsDropShadowEffect(this);
+    inputShadow->setBlurRadius(5);
+    inputShadow->setXOffset(0);
+    inputShadow->setYOffset(1);
+    inputShadow->setColor(QColor(0, 0, 0, 40));
+    ui->messageEdit->setGraphicsEffect(inputShadow);
 }
 
 ChatWindow::~ChatWindow() {
@@ -32,27 +56,29 @@ ChatWindow::~ChatWindow() {
 
 void ChatWindow::on_showLoginButton_clicked() {
     ui->authStackedWidget->setCurrentWidget(ui->loginPage);
-    ui->authButton->setText("Login");
+    ui->authButton->setText("Sign In");
     isLoginMode = true;
+    ui->showLoginButton->setChecked(true);
+    ui->showRegisterButton->setChecked(false);
 }
 
 void ChatWindow::on_showRegisterButton_clicked() {
     ui->authStackedWidget->setCurrentWidget(ui->registerPage);
-    ui->authButton->setText("Register");
+    ui->authButton->setText("Sign Up");
     isLoginMode = false;
+    ui->showRegisterButton->setChecked(true);
+    ui->showLoginButton->setChecked(false);
 }
 
 void ChatWindow::on_authButton_clicked() {
     QJsonObject data;
     if (isLoginMode) {
-        // 登录模式
         data["nickname"] = ui->loginNicknameEdit->text();
         data["password"] = ui->loginPasswordEdit->text();
         QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::Login, data)).toJson();
         qDebug() << "Sending login message:" << message;
         socket->write(message);
     } else {
-        // 注册模式
         data["email"] = ui->emailEdit->text();
         data["nickname"] = ui->nicknameEdit->text();
         data["password"] = ui->passwordEdit->text();
@@ -64,7 +90,7 @@ void ChatWindow::on_authButton_clicked() {
 
 void ChatWindow::on_sendButton_clicked() {
     if (!isLoggedIn) {
-        QMessageBox::warning(this, "Send Message", "Please login first!");
+        QMessageBox::warning(this, "Send Message", "Please sign in first!");
         return;
     }
     QJsonObject data;
@@ -84,10 +110,11 @@ void ChatWindow::handleServerData() {
         if (type == MessageType::Register) {
             if (msgData["status"].toString() == "success") {
                 QMessageBox::information(this, "Register", "Registration successful!");
-                // 切换回登录页面
                 ui->authStackedWidget->setCurrentWidget(ui->loginPage);
-                ui->authButton->setText("Login");
+                ui->authButton->setText("Sign In");
                 isLoginMode = true;
+                ui->showLoginButton->setChecked(true);
+                ui->showRegisterButton->setChecked(false);
             } else {
                 QMessageBox::warning(this, "Register", "Registration failed: " + msgData["reason"].toString());
             }
@@ -95,13 +122,12 @@ void ChatWindow::handleServerData() {
             if (msgData["status"].toString() == "success") {
                 isLoggedIn = true;
                 ui->sendButton->setEnabled(true);
-                ui->chatDisplay->append("Logged in as: " + ui->loginNicknameEdit->text());
-                // 切换到消息发送页面
+                ui->chatDisplay->append("Signed in as: " + ui->loginNicknameEdit->text());
                 ui->stackedWidget->setCurrentWidget(ui->chatPage);
             } else {
                 isLoggedIn = false;
                 ui->sendButton->setEnabled(false);
-                QMessageBox::warning(this, "Login", "Login failed: " + msgData["reason"].toString());
+                QMessageBox::warning(this, "Sign In", "Sign in failed: " + msgData["reason"].toString());
             }
         } else if (type == MessageType::Chat) {
             ui->chatDisplay->append(msgData["content"].toString());

@@ -3,6 +3,7 @@
 
 #include <QMainWindow>
 #include <QTcpSocket>
+#include <QGraphicsDropShadowEffect>
 #include "../Common/messageprotocol.h"
 
 QT_BEGIN_NAMESPACE
@@ -26,8 +27,11 @@ private slots:
 private:
     Ui::ChatWindow *ui;
     QTcpSocket *socket;
-    bool isLoggedIn = false; // 记录登录状态
-    bool isLoginMode = true; // 记录当前是登录模式还是注册模式
+    bool isLoggedIn = false;
+    bool isLoginMode = true;
+    QGraphicsDropShadowEffect *authShadow;  // Shadow for authContainer
+    QGraphicsDropShadowEffect *chatShadow;  // Shadow for chatDisplay
+    QGraphicsDropShadowEffect *inputShadow; // Shadow for messageEdit
 };
 
-#endif
+#endif // CHATWINDOW_H
