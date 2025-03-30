@@ -33,3 +33,6 @@ ChatServer/users.db
 # Docker 相关（可选）
 Dockerfile.lock
 *.dockerignore
+gd.js
+generate_docs.cpp
+output.md
