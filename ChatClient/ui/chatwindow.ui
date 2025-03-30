@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>900</width>
-    <height>0</height>
+    <height>600</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -21,6 +21,7 @@
     <item>
      <widget class="QStackedWidget" name="stackedWidget">
       <widget class="QWidget" name="authPage">
+       <!-- 登录页面保持不变 -->
        <layout class="QVBoxLayout" name="authVerticalLayout">
         <item>
          <spacer name="verticalSpacerTop">
@@ -255,7 +256,7 @@
                   <string>Username</string>
                  </property>
                  <property name="styleSheet">
-                  <string notr="true">font-size: 14px; color: #5F6368; font-family: 'Roboto', 'Segoe UI', sans-serif;</string>
+                  <string notr="true">scatter: 14px; color: #5F6368; font-family: 'Roboto', 'Segoe UI', sans-serif;</string>
                  </property>
                 </widget>
                </item>
@@ -374,54 +375,105 @@
        </layout>
       </widget>
       <widget class="QWidget" name="chatPage">
-       <layout class="QVBoxLayout" name="chatVerticalLayout">
+       <layout class="QHBoxLayout" name="chatHorizontalLayout">
         <item>
-         <widget class="QTextEdit" name="chatDisplay">
-          <property name="readOnly">
-           <bool>true</bool>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">border: 1px solid #DADCE0; border-radius: 4px; padding: 10px; font-size: 16px; background: white; color: #202124; font-family: 'Roboto', 'Segoe UI', sans-serif;</string>
-          </property>
+         <widget class="QWidget" name="leftPanel">
+          <layout class="QVBoxLayout" name="leftVerticalLayout">
+           <item>
+            <layout class="QHBoxLayout" name="searchLayout">
+             <item>
+              <widget class="QLineEdit" name="searchEdit">
+               <property name="placeholderText">
+                <string>Search by nickname or email</string>
+               </property>
+               <property name="styleSheet">
+                <string notr="true">padding: 8px; border: 1px solid #DADCE0; border-radius: 4px; font-size: 14px;</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="searchButton">
+               <property name="text">
+                <string>Search</string>
+               </property>
+               <property name="styleSheet">
+                <string notr="true">padding: 8px; background: #1A73E8; color: white; border: none; border-radius: 4px;</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <widget class="QPushButton" name="addFriendButton">
+             <property name="text">
+              <string>Add Friend</string>
+             </property>
+             <property name="styleSheet">
+              <string notr="true">padding: 8px; background: #1A73E8; color: white; border: none; border-radius: 4px;</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QListWidget" name="friendList">
+             <property name="styleSheet">
+              <string notr="true">border: 1px solid #DADCE0; border-radius: 4px; padding: 5px;</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
          </widget>
         </item>
         <item>
-         <layout class="QHBoxLayout" name="messageHorizontalLayout">
+         <layout class="QVBoxLayout" name="chatVerticalLayout">
           <item>
-           <widget class="QLineEdit" name="messageEdit">
-            <property name="placeholderText">
-             <string>Type a message...</string>
+           <widget class="QTextEdit" name="chatDisplay">
+            <property name="readOnly">
+             <bool>true</bool>
             </property>
             <property name="styleSheet">
-             <string notr="true">padding: 12px; border: 1px solid #DADCE0; border-radius: 4px; font-size: 16px; background: white; color: #202124; font-family: 'Roboto', 'Segoe UI', sans-serif;</string>
+             <string notr="true">border: 1px solid #DADCE0; border-radius: 4px; padding: 10px; font-size: 16px; background: white; color: #202124; font-family: 'Roboto', 'Segoe UI', sans-serif;</string>
             </property>
            </widget>
           </item>
           <item>
-           <widget class="QPushButton" name="sendButton">
-            <property name="text">
-             <string>Send</string>
-            </property>
-            <property name="styleSheet">
-             <string notr="true">
-              QPushButton {
-               padding: 10px 24px;
-               background: #1A73E8;
-               color: white;
-               border: none;
-               border-radius: 4px;
-               font-size: 14px;
-               font-family: 'Roboto', 'Segoe UI', sans-serif;
-              }
-              QPushButton:hover {
-               background: #1557B0;
-              }
-              QPushButton:pressed {
-               background: #104080;
-              }
-             </string>
-            </property>
-           </widget>
+           <layout class="QHBoxLayout" name="messageHorizontalLayout">
+            <item>
+             <widget class="QLineEdit" name="messageEdit">
+              <property name="placeholderText">
+               <string>Type a message...</string>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">padding: 12px; border: 1px solid #DADCE0; border-radius: 4px; font-size: 16px; background: white; color: #202124; font-family: 'Roboto', 'Segoe UI', sans-serif;</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="sendButton">
+              <property name="text">
+               <string>Send</string>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">
+                QPushButton {
+                 padding: 10px 24px;
+                 background: #1A73E8;
+                 color: white;
+                 border: none;
+                 border-radius: 4px;
+                 font-size: 14px;
+                 font-family: 'Roboto', 'Segoe UI', sans-serif;
+                }
+                QPushButton:hover {
+                 background: #1557B0;
+                }
+                QPushButton:pressed {
+                 background: #104080;
+                }
+               </string>
+              </property>
+             </widget>
+            </item>
+           </layout>
           </item>
          </layout>
         </item>

@@ -6,8 +6,12 @@
 enum class MessageType {
     Login,
     Chat,
-    Register,// 新增注册消息类型
-    Error
+    Register,
+    Error,
+    SearchUser,
+    AddFriend,
+    GetFriendList,
+    GetChatHistory
 };
 
 class MessageProtocol {

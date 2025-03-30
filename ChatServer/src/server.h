@@ -26,13 +26,18 @@ private:
     };
 
     QTcpServer *tcpServer;
-    QList<ClientInfo> clients; // 存储客户端信息
-    QSqlDatabase db; // SQLite 数据库
+    QList<ClientInfo> clients;
+    QSqlDatabase db;
 
-    bool initDatabase(); // 初始化数据库
-    QString hashPassword(const QString &password); // 密码加密
-    bool registerUser(const QString &email, const QString &nickname, const QString &password); // 注册用户
-    QString loginUser(const QString &nickname, const QString &password, ClientInfo &client); // 登录用户，返回错误信息
+    bool initDatabase();
+    QString hashPassword(const QString &password);
+    bool registerUser(const QString &email, const QString &nickname, const QString &password);
+    QString loginUser(const QString &nickname, const QString &password, ClientInfo &client);
+    bool addFriend(const QString &user, const QString &friendName);
+    QStringList getFriendList(const QString &user);
+    bool saveChatMessage(const QString &from, const QString &to, const QString &content);
+    QJsonArray getChatHistory(const QString &user1, const QString &user2);
+    QString searchUser(const QString &query);
 };
 
 #endif
