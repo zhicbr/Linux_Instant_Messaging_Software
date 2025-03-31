@@ -15,7 +15,7 @@ class ChatWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    ChatWindow(QWidget *parent = nullptr);
+    explicit ChatWindow(QWidget *parent = nullptr);
     ~ChatWindow();
 
 private slots:
@@ -33,14 +33,15 @@ private:
     QTcpSocket *socket;
     bool isLoggedIn = false;
     bool isLoginMode = true;
-    QString currentNickname; // 当前登录用户昵称
-    QString currentChatFriend; // 当前聊天对象
+    QString currentNickname;
+    QString currentChatFriend;
     QGraphicsDropShadowEffect *authShadow;
     QGraphicsDropShadowEffect *chatShadow;
     QGraphicsDropShadowEffect *inputShadow;
 
     void updateFriendList(const QStringList &friends);
     void loadChatHistory(const QString &friendName);
+    void appendMessage(const QString &sender, const QString &content);
 };
 
 #endif // CHATWINDOW_H

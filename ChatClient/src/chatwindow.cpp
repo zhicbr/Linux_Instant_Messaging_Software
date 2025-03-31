@@ -4,68 +4,179 @@
 #include <QJsonArray>
 #include <QMessageBox>
 #include <QDebug>
+#include <QScrollBar>
 #include "../Common/config.h"
 
-ChatWindow::ChatWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::ChatWindow) {
+ChatWindow::ChatWindow(QWidget *parent) : 
+    QMainWindow(parent),
+    ui(new Ui::ChatWindow),
+    socket(new QTcpSocket(this)),
+    isLoggedIn(false),
+    isLoginMode(true),
+    authShadow(new QGraphicsDropShadowEffect(this)),
+    chatShadow(new QGraphicsDropShadowEffect(this)),
+    inputShadow(new QGraphicsDropShadowEffect(this))
+{
     ui->setupUi(this);
-    socket = new QTcpSocket(this);
-    qDebug() << "Connecting to server at" << Config::DefaultServerIp << ":" << Config::DefaultPort;
+
+    // 初始化网络连接
     socket->connectToHost(Config::DefaultServerIp, Config::DefaultPort);
-    if (!socket->waitForConnected(5000)) {
-        qDebug() << "Failed to connect to server:" << socket->errorString();
-        QMessageBox::critical(this, "Connection Error", "Failed to connect to server: " + socket->errorString());
-    }
     connect(socket, &QTcpSocket::readyRead, this, &ChatWindow::handleServerData);
 
+    // 初始化UI状态
     ui->stackedWidget->setCurrentWidget(ui->authPage);
     ui->authStackedWidget->setCurrentWidget(ui->loginPage);
-    ui->authButton->setText("Sign In");
-    isLoginMode = true;
-    ui->showLoginButton->setChecked(true);
-    ui->showRegisterButton->setChecked(false);
-
     ui->sendButton->setEnabled(false);
 
-    authShadow = new QGraphicsDropShadowEffect(this);
+    // 设置阴影效果
     authShadow->setBlurRadius(10);
-    authShadow->setXOffset(0);
-    authShadow->setYOffset(2);
-    authShadow->setColor(QColor(0, 0, 0, 60));
     ui->authContainer->setGraphicsEffect(authShadow);
-
-    chatShadow = new QGraphicsDropShadowEffect(this);
+    
     chatShadow->setBlurRadius(10);
-    chatShadow->setXOffset(0);
-    chatShadow->setYOffset(2);
-    chatShadow->setColor(QColor(0, 0, 0, 60));
     ui->chatDisplay->setGraphicsEffect(chatShadow);
-
-    inputShadow = new QGraphicsDropShadowEffect(this);
+    
     inputShadow->setBlurRadius(5);
-    inputShadow->setXOffset(0);
-    inputShadow->setYOffset(1);
-    inputShadow->setColor(QColor(0, 0, 0, 40));
     ui->messageEdit->setGraphicsEffect(inputShadow);
+
+    // 配置聊天框样式
+    ui->chatDisplay->document()->setDefaultStyleSheet(
+        "body { font-family: 'Segoe UI', Arial; font-size: 14px; margin: 0; padding: 0; }"
+        ".message { margin: 8px 0; padding: 10px 15px; border-radius: 18px; max-width: 70%; "
+        "word-wrap: break-word; line-height: 1.4; }"
+        ".self { background: #0084ff; color: white; margin-left: 30%; text-align: right; "
+        "border-bottom-right-radius: 5px; }"
+        ".friend { background: #e5e5ea; color: black; margin-right: 30%; text-align: left; "
+        "border-bottom-left-radius: 5px; }"
+        ".timestamp { color: #999; font-size: 11px; margin: 5px 10px; }"
+    );
 }
 
-ChatWindow::~ChatWindow() {
+ChatWindow::~ChatWindow()
+{
     delete ui;
 }
 
+void ChatWindow::appendMessage(const QString &sender, const QString &content)
+{
+    bool isSelf = (sender == currentNickname);
+    QString className = isSelf ? "self" : "friend";
+    QString displayName = isSelf ? "You" : sender;
+    QString timestamp = QDateTime::currentDateTime().toString("hh:mm");
+
+    QString html = QString(
+        "<div class='timestamp' style='text-align:%1'>%2</div>"
+        "<div class='message %3'>"
+        "<b>%4:</b><br>%5"
+        "</div>"
+    ).arg(isSelf ? "right" : "left")
+     .arg(timestamp)
+     .arg(className)
+     .arg(displayName)
+     .arg(content.toHtmlEscaped().replace("\n", "<br>"));
+
+    ui->chatDisplay->append(html);
+    
+    // 自动滚动到底部
+    QScrollBar *scrollbar = ui->chatDisplay->verticalScrollBar();
+    scrollbar->setValue(scrollbar->maximum());
+}
+
+void ChatWindow::on_sendButton_clicked()
+{
+    if (!isLoggedIn || currentChatFriend.isEmpty()) {
+        QMessageBox::warning(this, "Error", "Please login and select a friend first!");
+        return;
+    }
+
+    QString message = ui->messageEdit->text().trimmed();
+    if (message.isEmpty()) return;
+
+    // 发送消息
+    QJsonObject data{
+        {"to", currentChatFriend},
+        {"content", message}
+    };
+    socket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Chat, data)).toJson());
+
+    // 本地显示
+    appendMessage(currentNickname, message);
+    ui->messageEdit->clear();
+}
+
+void ChatWindow::handleServerData()
+{
+    QByteArray data = socket->readAll();
+    MessageType type;
+    QJsonObject msgData;
+
+    if (!MessageProtocol::parseMessage(data, type, msgData)) {
+        qWarning() << "Failed to parse message:" << data;
+        return;
+    }
+
+    switch (type) {
+    case MessageType::Login:
+        if (msgData["status"].toString() == "success") {
+            isLoggedIn = true;
+            currentNickname = ui->loginNicknameEdit->text();
+            ui->sendButton->setEnabled(true);
+            ui->stackedWidget->setCurrentWidget(ui->chatPage);
+            ui->chatDisplay->append("<center>Logged in successfully</center>");
+            
+            // 请求好友列表
+            socket->write(QJsonDocument(MessageProtocol::createMessage(
+                MessageType::GetFriendList, {})).toJson());
+        } else {
+            QMessageBox::warning(this, "Login Failed", msgData["reason"].toString());
+        }
+        break;
+
+    case MessageType::Chat:
+        if (msgData["from"].toString() == currentChatFriend) {
+            appendMessage(msgData["from"].toString(), msgData["content"].toString());
+        }
+        break;
+
+    case MessageType::GetFriendList:
+        if (msgData["status"].toString() == "success") {
+            ui->friendList->clear();
+            for (const QJsonValue &value : msgData["friends"].toArray()) {
+                ui->friendList->addItem(value.toString());
+            }
+        }
+        break;
+
+    case MessageType::GetChatHistory:
+        if (msgData["status"].toString() == "success") {
+            ui->chatDisplay->clear();
+            for (const QJsonValue &msg : msgData["messages"].toArray()) {
+                QJsonObject obj = msg.toObject();
+                appendMessage(obj["from"].toString(), obj["content"].toString());
+            }
+        }
+        break;
+
+    case MessageType::Error:
+        QMessageBox::warning(this, "Error", msgData["reason"].toString());
+        break;
+
+    default:
+        qDebug() << "Unhandled message type:" << static_cast<int>(type);
+        break;
+    }
+}
+
+// 其他UI槽函数保持不变
 void ChatWindow::on_showLoginButton_clicked() {
     ui->authStackedWidget->setCurrentWidget(ui->loginPage);
     ui->authButton->setText("Sign In");
     isLoginMode = true;
-    ui->showLoginButton->setChecked(true);
-    ui->showRegisterButton->setChecked(false);
 }
 
 void ChatWindow::on_showRegisterButton_clicked() {
     ui->authStackedWidget->setCurrentWidget(ui->registerPage);
     ui->authButton->setText("Sign Up");
     isLoginMode = false;
-    ui->showRegisterButton->setChecked(true);
-    ui->showLoginButton->setChecked(false);
 }
 
 void ChatWindow::on_authButton_clicked() {
@@ -73,168 +184,54 @@ void ChatWindow::on_authButton_clicked() {
     if (isLoginMode) {
         data["nickname"] = ui->loginNicknameEdit->text();
         data["password"] = ui->loginPasswordEdit->text();
-        QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::Login, data)).toJson();
-        qDebug() << "Sending login message:" << message;
-        socket->write(message);
     } else {
         data["email"] = ui->emailEdit->text();
         data["nickname"] = ui->nicknameEdit->text();
         data["password"] = ui->passwordEdit->text();
-        QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::Register, data)).toJson();
-        qDebug() << "Sending register message:" << message;
-        socket->write(message);
     }
+
+    MessageType msgType = isLoginMode ? MessageType::Login : MessageType::Register;
+    socket->write(QJsonDocument(MessageProtocol::createMessage(msgType, data)).toJson());
 }
 
-void ChatWindow::on_sendButton_clicked() {
-    if (!isLoggedIn) {
-        QMessageBox::warning(this, "Send Message", "Please sign in first!");
-        return;
-    }
-    if (currentChatFriend.isEmpty()) {
-        QMessageBox::warning(this, "Send Message", "Please select a friend to chat with!");
-        return;
-    }
-    QJsonObject data;
-    data["to"] = currentChatFriend;
-    data["content"] = ui->messageEdit->text();
-    QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::Chat, data)).toJson();
-    qDebug() << "Sending private message:" << message;
-    socket->write(message);
-    ui->chatDisplay->append("You: " + ui->messageEdit->text());
-    ui->messageEdit->clear();
-}
-
-void ChatWindow::on_searchButton_clicked() {
-    QString searchText = ui->searchEdit->text();
-    if (searchText.isEmpty()) {
-        QMessageBox::warning(this, "Search", "Please enter a nickname or email to search!");
-        return;
-    }
-    QJsonObject data;
-    data["query"] = searchText;
-    QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::SearchUser, data)).toJson();
-    qDebug() << "Sending search request:" << message;
-    socket->write(message);
-}
-
-void ChatWindow::on_addFriendButton_clicked() {
-    QString friendName = ui->searchEdit->text();
-    if (friendName.isEmpty()) {
-        QMessageBox::warning(this, "Add Friend", "Please search for a user first!");
-        return;
-    }
-    QJsonObject data;
-    data["friend"] = friendName;
-    QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::AddFriend, data)).toJson();
-    qDebug() << "Sending add friend request:" << message;
-    socket->write(message);
-}
-
-void ChatWindow::on_friendList_itemClicked(QListWidgetItem *item) {
+void ChatWindow::on_friendList_itemClicked(QListWidgetItem *item)
+{
     currentChatFriend = item->text();
     ui->chatDisplay->clear();
-    loadChatHistory(currentChatFriend);
+    
+    QJsonObject data{{"friend", currentChatFriend}};
+    socket->write(QJsonDocument(MessageProtocol::createMessage(
+        MessageType::GetChatHistory, data)).toJson());
 }
 
-void ChatWindow::updateFriendList(const QStringList &friends) {
+void ChatWindow::on_searchButton_clicked()
+{
+    QString query = ui->searchEdit->text().trimmed();
+    if (query.isEmpty()) return;
+    
+    socket->write(QJsonDocument(MessageProtocol::createMessage(
+        MessageType::SearchUser, {{"query", query}})).toJson());
+}
+
+void ChatWindow::on_addFriendButton_clicked()
+{
+    if (ui->searchEdit->text().isEmpty()) return;
+    
+    socket->write(QJsonDocument(MessageProtocol::createMessage(
+        MessageType::AddFriend, {{"friend", ui->searchEdit->text()}})).toJson());
+}
+
+void ChatWindow::updateFriendList(const QStringList &friends)
+{
     ui->friendList->clear();
     for (const QString &friendName : friends) {
         ui->friendList->addItem(friendName);
     }
 }
 
-void ChatWindow::loadChatHistory(const QString &friendName) {
-    QJsonObject data;
-    data["friend"] = friendName;
-    QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::GetChatHistory, data)).toJson();
-    qDebug() << "Requesting chat history with:" << friendName;
-    socket->write(message);
-}
-
-void ChatWindow::handleServerData() {
-    QByteArray data = socket->readAll();
-    qDebug() << "Received data from server:" << data;
-    MessageType type;
-    QJsonObject msgData;
-    if (MessageProtocol::parseMessage(data, type, msgData)) {
-        switch (type) {
-        case MessageType::Register:
-            if (msgData["status"].toString() == "success") {
-                QMessageBox::information(this, "Register", "Registration successful!");
-                ui->authStackedWidget->setCurrentWidget(ui->loginPage);
-                ui->authButton->setText("Sign In");
-                isLoginMode = true;
-                ui->showLoginButton->setChecked(true);
-                ui->showRegisterButton->setChecked(false);
-            } else {
-                QMessageBox::warning(this, "Register", "Registration failed: " + msgData["reason"].toString());
-            }
-            break;
-        case MessageType::Login:
-            if (msgData["status"].toString() == "success") {
-                isLoggedIn = true;
-                currentNickname = ui->loginNicknameEdit->text();
-                ui->sendButton->setEnabled(true);
-                ui->chatDisplay->append("Signed in as: " + currentNickname);
-                ui->stackedWidget->setCurrentWidget(ui->chatPage);
-                QJsonObject data;
-                QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::GetFriendList, data)).toJson();
-                socket->write(message);
-            } else {
-                isLoggedIn = false;
-                ui->sendButton->setEnabled(false);
-                QMessageBox::warning(this, "Sign In", "Sign in failed: " + msgData["reason"].toString());
-            }
-            break;
-        case MessageType::Chat:
-            if (msgData["from"].toString() == currentChatFriend) {
-                ui->chatDisplay->append(msgData["from"].toString() + ": " + msgData["content"].toString());
-            }
-            break;
-        case MessageType::SearchUser:
-            if (msgData["status"].toString() == "success") {
-                ui->searchEdit->setText(msgData["nickname"].toString());
-                QMessageBox::information(this, "Search", "User found: " + msgData["nickname"].toString());
-            } else {
-                QMessageBox::warning(this, "Search", "User not found!");
-            }
-            break;
-        case MessageType::AddFriend:
-            if (msgData["status"].toString() == "success") {
-                QMessageBox::information(this, "Add Friend", "Friend added successfully!");
-                QJsonObject data;
-                QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::GetFriendList, data)).toJson();
-                socket->write(message);
-            } else {
-                QMessageBox::warning(this, "Add Friend", "Failed to add friend: " + msgData["reason"].toString());
-            }
-            break;
-        case MessageType::GetFriendList:
-            if (msgData["status"].toString() == "success") {
-                QJsonArray friendArray = msgData["friends"].toArray();
-                QStringList friends;
-                for (const QJsonValue &value : friendArray) {
-                    friends.append(value.toString());
-                }
-                updateFriendList(friends);
-            }
-            break;
-        case MessageType::GetChatHistory:
-            if (msgData["status"].toString() == "success") {
-                for (const QJsonValue &msg : msgData["messages"].toArray()) {
-                    QJsonObject obj = msg.toObject();
-                    QString sender = obj["from"].toString();
-                    QString content = obj["content"].toString();
-                    ui->chatDisplay->append(sender + ": " + content);
-                }
-            }
-            break;
-        case MessageType::Error:
-            QMessageBox::warning(this, "Error", msgData["reason"].toString());
-            break;
-        }
-    } else {
-        qDebug() << "Failed to parse server message:" << data;
-    }
+void ChatWindow::loadChatHistory(const QString &friendName)
+{
+    QJsonObject data{{"friend", friendName}};
+    socket->write(QJsonDocument(MessageProtocol::createMessage(
+        MessageType::GetChatHistory, data)).toJson());
 }
