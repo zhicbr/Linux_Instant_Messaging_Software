@@ -36,3 +36,6 @@ Dockerfile.lock
 gd.js
 generate_docs.cpp
 output.md
+
+am.js
+Modification.md
