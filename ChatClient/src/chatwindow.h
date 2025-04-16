@@ -1,47 +1,63 @@
 #ifndef CHATWINDOW_H
 #define CHATWINDOW_H
 
-#include <QMainWindow>
+#include <QObject>
 #include <QTcpSocket>
-#include <QGraphicsDropShadowEffect>
-#include <QListWidgetItem>
+#include <QJsonArray>
 #include "../Common/messageprotocol.h"
 
-QT_BEGIN_NAMESPACE
-namespace Ui { class ChatWindow; }
-QT_END_NAMESPACE
-
-class ChatWindow : public QMainWindow {
+class ChatWindow : public QObject {
     Q_OBJECT
+    Q_PROPERTY(bool isLoggedIn READ isLoggedIn NOTIFY isLoggedInChanged)
+    Q_PROPERTY(QString currentNickname READ currentNickname NOTIFY currentNicknameChanged)
+    Q_PROPERTY(QString currentChatFriend READ currentChatFriend NOTIFY currentChatFriendChanged)
 
 public:
-    explicit ChatWindow(QWidget *parent = nullptr);
+    explicit ChatWindow(QObject *parent = nullptr);
     ~ChatWindow();
 
+    bool isLoggedIn() const { return m_isLoggedIn; }
+    QString currentNickname() const { return m_currentNickname; }
+    QString currentChatFriend() const { return m_currentChatFriend; }
+
+    // QML 可调用的方法
+    Q_INVOKABLE void login(const QString &nickname, const QString &password);
+    Q_INVOKABLE void registerUser(const QString &email, const QString &nickname, const QString &password);
+    Q_INVOKABLE void sendMessage(const QString &content);
+    Q_INVOKABLE void selectFriend(const QString &friendName);
+    Q_INVOKABLE void searchUser(const QString &query);
+    Q_INVOKABLE void addFriend(const QString &friendName);
+    Q_INVOKABLE QStringList getFriendList() const;
+
+    // 更新 QML 界面的方法
+    Q_INVOKABLE void appendMessage(const QString &sender, const QString &content, const QString &timestamp);
+    Q_INVOKABLE void clearChatDisplay();
+    Q_INVOKABLE void setStatusMessage(const QString &message);
+    Q_INVOKABLE void updateFriendList(const QStringList &friends);
+
+signals:
+    void isLoggedInChanged();
+    void currentNicknameChanged();
+    void currentChatFriendChanged();
+    void messageReceived(const QString &sender, const QString &content, const QString &timestamp);
+    void statusMessage(const QString &message);
+    void friendListUpdated(const QStringList &friends);
+    void chatDisplayCleared();
+
 private slots:
-    void on_showLoginButton_clicked();
-    void on_showRegisterButton_clicked();
-    void on_authButton_clicked();
-    void on_sendButton_clicked();
     void handleServerData();
-    void on_searchButton_clicked();
-    void on_addFriendButton_clicked();
-    void on_friendList_itemClicked(QListWidgetItem *item);
+    void onConnected();
+    void onDisconnected();
+    void onSocketError(QAbstractSocket::SocketError socketError);
 
 private:
-    Ui::ChatWindow *ui;
-    QTcpSocket *socket;
-    bool isLoggedIn = false;
-    bool isLoginMode = true;
-    QString currentNickname;
-    QString currentChatFriend;
-    QGraphicsDropShadowEffect *authShadow;
-    QGraphicsDropShadowEffect *chatShadow;
-    QGraphicsDropShadowEffect *inputShadow;
+    QTcpSocket *m_socket;
+    bool m_isLoggedIn = false;
+    QString m_currentNickname;
+    QString m_currentChatFriend;
+    QStringList m_friendList;
 
-    void updateFriendList(const QStringList &friends);
     void loadChatHistory(const QString &friendName);
-    void appendMessage(const QString &sender, const QString &content);
 };
 
 #endif // CHATWINDOW_H

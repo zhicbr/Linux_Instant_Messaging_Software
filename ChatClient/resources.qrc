@@ -1,0 +1,10 @@
+<RCC>
+    <qresource prefix="/">
+        <file>qml/main.qml</file>
+        <file>qml/LoginPage.qml</file>
+        <file>qml/RegisterPage.qml</file>
+        <file>qml/ChatPage.qml</file>
+        <file>qml/MessageBubble.qml</file>
+        <file>qml/FriendListItem.qml</file>
+    </qresource>
+</RCC>
