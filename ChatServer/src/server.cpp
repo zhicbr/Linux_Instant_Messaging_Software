@@ -39,6 +39,7 @@ void Server::handleNewConnection() {
     clientInfo.isLoggedIn = false;
     clients.append(clientInfo);
     connect(clientSocket, &QTcpSocket::readyRead, this, &Server::handleClientData);
+    connect(clientSocket, &QTcpSocket::disconnected, this, &Server::handleClientDisconnection);
 }
 
 void Server::handleClientData() {
@@ -91,6 +92,8 @@ void Server::handleClientData() {
                 qDebug() << "Login successful for" << nickname;
                 clientInfo->isLoggedIn = true;
                 clientInfo->nickname = nickname;
+                updateUserStatus(nickname, true);
+                notifyFriendsStatusChange(nickname, true);
                 clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Login, {{"status", "success"}})).toJson());
             } else {
                 qDebug() << "Login failed for" << nickname << ":" << loginResult;
@@ -173,11 +176,73 @@ void Server::handleClientData() {
                 clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::GetChatHistory, response)).toJson());
             }
             break;
+        case MessageType::Logout:
+            if (!clientInfo->isLoggedIn) {
+                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Error, {{"reason", "Not logged in"}})).toJson());
+                return;
+            }
+            handleLogout(clientInfo);
+            break;
         case MessageType::Error:
             break; // 忽略客户端发送的错误消息
         }
     } else {
         qDebug() << "Failed to parse message:" << data;
+    }
+}
+
+void Server::handleClientDisconnection() {
+    QTcpSocket *clientSocket = qobject_cast<QTcpSocket*>(sender());
+    if (!clientSocket) return;
+
+    for (int i = 0; i < clients.size(); ++i) {
+        if (clients[i].socket == clientSocket) {
+            if (clients[i].isLoggedIn) {
+                handleLogout(&clients[i]);
+            }
+            clients.removeAt(i);
+            break;
+        }
+    }
+    clientSocket->deleteLater();
+}
+
+void Server::handleLogout(ClientInfo *clientInfo) {
+    if (!clientInfo || !clientInfo->isLoggedIn) return;
+
+    updateUserStatus(clientInfo->nickname, false);
+    notifyFriendsStatusChange(clientInfo->nickname, false);
+    
+    // 发送登出成功消息给客户端
+    QJsonObject response;
+    response["status"] = "success";
+    clientInfo->socket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Logout, response)).toJson());
+    
+    clientInfo->isLoggedIn = false;
+    clientInfo->nickname.clear();
+}
+
+void Server::updateUserStatus(const QString &nickname, bool isOnline) {
+    QSqlQuery query(db);
+    query.prepare("UPDATE users SET is_online = ? WHERE nickname = ?");
+    query.addBindValue(isOnline ? 1 : 0);
+    query.addBindValue(nickname);
+    if (!query.exec()) {
+        qDebug() << "Error updating user status:" << query.lastError().text();
+    }
+}
+
+void Server::notifyFriendsStatusChange(const QString &nickname, bool isOnline) {
+    QStringList friends = getFriendList(nickname);
+    QJsonObject statusMsg;
+    statusMsg["friend"] = nickname;
+    statusMsg["isOnline"] = isOnline;
+    QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::UserStatus, statusMsg)).toJson();
+    
+    for (const ClientInfo &client : clients) {
+        if (client.isLoggedIn && friends.contains(client.nickname)) {
+            client.socket->write(message);
+        }
     }
 }
 
@@ -191,12 +256,17 @@ bool Server::initDatabase() {
         return false;
     }
 
+    // 先删除旧表以确保字段正确
+    QSqlQuery dropQuery(db);
+    dropQuery.exec("DROP TABLE IF EXISTS users");
+
     QSqlQuery query;
     QString createUsersTable = R"(
         CREATE TABLE IF NOT EXISTS users (
             email TEXT PRIMARY KEY,
             nickname TEXT UNIQUE,
-            password TEXT NOT NULL
+            password TEXT NOT NULL,
+            is_online INTEGER DEFAULT 0
         )
     )";
     if (!query.exec(createUsersTable)) {
@@ -243,29 +313,31 @@ QString Server::hashPassword(const QString &password) {
 }
 
 bool Server::registerUser(const QString &email, const QString &nickname, const QString &password) {
-    QSqlQuery query;
-    query.prepare("SELECT email, nickname FROM users WHERE email = :email OR nickname = :nickname");
-    query.bindValue(":email", email);
-    query.bindValue(":nickname", nickname);
+    QSqlQuery query(db);
+    query.prepare("SELECT email, nickname FROM users WHERE email = ? OR nickname = ?");
+    query.addBindValue(email);
+    query.addBindValue(nickname);
     if (!query.exec() || query.next()) {
         return false;
     }
-    query.prepare("INSERT INTO users (email, nickname, password) VALUES (:email, :nickname, :password)");
-    query.bindValue(":email", email);
-    query.bindValue(":nickname", nickname);
-    query.bindValue(":password", hashPassword(password));
+    query.prepare("INSERT INTO users (email, nickname, password, is_online) VALUES (?, ?, ?, 0)");
+    query.addBindValue(email);
+    query.addBindValue(nickname);
+    query.addBindValue(hashPassword(password));
     return query.exec();
 }
 
 QString Server::loginUser(const QString &nickname, const QString &password, ClientInfo &client) {
-    QSqlQuery query;
-    query.prepare("SELECT password FROM users WHERE nickname = :nickname");
-    query.bindValue(":nickname", nickname);
+    QSqlQuery query(db);
+    query.prepare("SELECT password FROM users WHERE nickname = ?");
+    query.addBindValue(nickname);
     if (!query.exec() || !query.next()) {
         return "User not found";
     }
     QString storedPassword = query.value("password").toString();
     if (storedPassword == hashPassword(password)) {
+        updateUserStatus(nickname, true);
+        notifyFriendsStatusChange(nickname, true);
         return "success";
     }
     return "Invalid password";

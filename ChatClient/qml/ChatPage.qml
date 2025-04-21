@@ -22,6 +22,52 @@ Rectangle {
                 anchors.margins: 10
                 spacing: 10
 
+                // 添加设置和登出按钮
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+
+                    Button {
+                        text: "设置"
+                        Layout.fillWidth: true
+                        font.pixelSize: 13
+                        background: Rectangle {
+                            color: parent.pressed ? "#0062cc" : "#0069d9"
+                            radius: 6
+                            border.width: 0
+                        }
+                        contentItem: Text {
+                            text: parent.text
+                            color: "white"
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            font: parent.font
+                        }
+                        onClicked: stackView.push(settingsPage)
+                    }
+
+                    Button {
+                        text: "登出"
+                        Layout.fillWidth: true
+                        font.pixelSize: 13
+                        background: Rectangle {
+                            color: parent.pressed ? "#c82333" : "#dc3545"
+                            radius: 6
+                            border.width: 0
+                        }
+                        contentItem: Text {
+                            text: parent.text
+                            color: "white"
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            font: parent.font
+                        }
+                        onClicked: {
+                            chatWindow.logout();
+                        }
+                    }
+                }
+
                 RowLayout {
                     spacing: 5
                     TextField {
@@ -42,7 +88,7 @@ Rectangle {
                         Layout.preferredHeight: 30
                         font.bold: true
                         background: Rectangle {
-                            color: hovered ? "#0056b3" : "#007BFF"
+                            color: parent.pressed ? "#0056b3" : "#007BFF"
                             radius: 15
                         }
                         contentItem: Text {
@@ -60,7 +106,7 @@ Rectangle {
                     Layout.fillWidth: true
                     font.pixelSize: 13
                     background: Rectangle {
-                        color: hovered ? "#5A6268" : "#6C757D"
+                        color: parent.pressed ? "#5A6268" : "#6C757D"
                         radius: 6
                     }
                     contentItem: Text {
@@ -155,12 +201,12 @@ Rectangle {
                         Layout.preferredHeight: 40
                         enabled: chatWindow.currentChatFriend !== ""
                         background: Rectangle {
-                            color: enabled ? (hovered ? "#0056b3" : "#007BFF") : "#B0D7FF"
+                            color: parent.enabled ? (parent.pressed ? "#0056b3" : "#007BFF") : "#B0D7FF"
                             radius: 20
                         }
                         contentItem: Text {
                             text: parent.text
-                            color: enabled ? "white" : "#E0F0FF"
+                            color: parent.enabled ? "white" : "#E0F0FF"
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }

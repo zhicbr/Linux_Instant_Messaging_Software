@@ -104,13 +104,20 @@ ApplicationWindow {
         ChatPage {}
     }
 
+    Component {
+        id: settingsPage
+        SettingsPage {}
+    }
+
     Connections {
         target: chatWindow
         function onIsLoggedInChanged() {
             if (chatWindow.isLoggedIn) {
-                stackView.replace(chatPage);
+                stackView.clear();
+                stackView.push(chatPage);
             } else {
-                stackView.replace(authPage);
+                stackView.clear();
+                stackView.push(authPage);
             }
         }
         function onStatusMessage(message) {

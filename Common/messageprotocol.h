@@ -11,7 +11,9 @@ enum class MessageType {
     SearchUser,
     AddFriend,
     GetFriendList,
-    GetChatHistory
+    GetChatHistory,
+    Logout,
+    UserStatus
 };
 
 class MessageProtocol {

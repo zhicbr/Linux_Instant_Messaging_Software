@@ -17,6 +17,7 @@ public:
 private slots:
     void handleNewConnection();
     void handleClientData();
+    void handleClientDisconnection();
 
 private:
     struct ClientInfo {
@@ -38,6 +39,9 @@ private:
     bool saveChatMessage(const QString &from, const QString &to, const QString &content);
     QJsonArray getChatHistory(const QString &user1, const QString &user2);
     QString searchUser(const QString &query);
+    void updateUserStatus(const QString &nickname, bool isOnline);
+    void handleLogout(ClientInfo *clientInfo);
+    void notifyFriendsStatusChange(const QString &nickname, bool isOnline);
 };
 
 #endif

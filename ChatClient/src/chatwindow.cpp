@@ -172,6 +172,37 @@ void ChatWindow::updateFriendList(const QStringList &friends)
     emit friendListUpdated(friends);
 }
 
+void ChatWindow::setIsLoggedIn(bool loggedIn) {
+    if (m_isLoggedIn != loggedIn) {
+        m_isLoggedIn = loggedIn;
+        emit isLoggedInChanged();
+    }
+}
+
+void ChatWindow::logout() {
+    if (!m_isLoggedIn) {
+        return;
+    }
+
+    if (m_socket->state() == QAbstractSocket::ConnectedState) {
+        m_socket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Logout, QJsonObject())).toJson());
+    }
+
+    // 清理状态
+    m_isLoggedIn = false;
+    m_currentNickname.clear();
+    m_currentChatFriend.clear();
+    m_friendList.clear();
+
+    // 发出信号
+    emit isLoggedInChanged();
+    emit currentNicknameChanged();
+    emit currentChatFriendChanged();
+    emit friendListUpdated(m_friendList);
+    emit chatDisplayCleared();
+    emit statusMessage("已登出");
+}
+
 void ChatWindow::handleServerData()
 {
     QByteArray data = m_socket->readAll();
@@ -278,6 +309,21 @@ void ChatWindow::handleServerData()
 
     case MessageType::Error:
         emit statusMessage("服务器错误：" + msgData.value("reason").toString("发生未知错误"));
+        break;
+
+    case MessageType::Logout:
+        if (msgData.value("status").toString() == "success") {
+            m_isLoggedIn = false;
+            m_currentNickname.clear();
+            m_currentChatFriend.clear();
+            m_friendList.clear();
+            emit isLoggedInChanged();
+            emit currentNicknameChanged();
+            emit currentChatFriendChanged();
+            emit friendListUpdated(m_friendList);
+            emit chatDisplayCleared();
+            emit statusMessage("已成功登出");
+        }
         break;
 
     default:

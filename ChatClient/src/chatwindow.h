@@ -8,7 +8,7 @@
 
 class ChatWindow : public QObject {
     Q_OBJECT
-    Q_PROPERTY(bool isLoggedIn READ isLoggedIn NOTIFY isLoggedInChanged)
+    Q_PROPERTY(bool isLoggedIn READ isLoggedIn WRITE setIsLoggedIn NOTIFY isLoggedInChanged)
     Q_PROPERTY(QString currentNickname READ currentNickname NOTIFY currentNicknameChanged)
     Q_PROPERTY(QString currentChatFriend READ currentChatFriend NOTIFY currentChatFriendChanged)
 
@@ -17,6 +17,7 @@ public:
     ~ChatWindow();
 
     bool isLoggedIn() const { return m_isLoggedIn; }
+    void setIsLoggedIn(bool loggedIn);
     QString currentNickname() const { return m_currentNickname; }
     QString currentChatFriend() const { return m_currentChatFriend; }
 
@@ -28,6 +29,7 @@ public:
     Q_INVOKABLE void searchUser(const QString &query);
     Q_INVOKABLE void addFriend(const QString &friendName);
     Q_INVOKABLE QStringList getFriendList() const;
+    Q_INVOKABLE void logout();
 
     // 更新 QML 界面的方法
     Q_INVOKABLE void appendMessage(const QString &sender, const QString &content, const QString &timestamp);
