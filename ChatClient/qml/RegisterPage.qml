@@ -24,6 +24,7 @@ Rectangle {
             Layout.fillWidth: true
             placeholderText: "输入您的电子邮件"
             font.pixelSize: 15
+            inputMethodHints: Qt.ImhEmailCharactersOnly
             background: Rectangle {
                 border.color: emailField.activeFocus ? "#80BDFF" : "#CED4DA"
                 border.width: 1
@@ -79,12 +80,13 @@ Rectangle {
             font.pixelSize: 15
             font.bold: true
             background: Rectangle {
-                color: enabled ? (hovered ? "#0056b3" : "#007BFF") : "#B0D7FF"
+                color: "#0069d9"
                 radius: 8
+                border.width: 0
             }
             contentItem: Text {
                 text: parent.text
-                color: enabled ? "white" : "#E0F0FF"
+                color: "white"
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 font: parent.font

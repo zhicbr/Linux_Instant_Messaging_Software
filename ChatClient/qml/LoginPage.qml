@@ -60,12 +60,13 @@ Rectangle {
             font.pixelSize: 15
             font.bold: true
             background: Rectangle {
-                color: enabled ? (hovered ? "#0056b3" : "#007BFF") : "#B0D7FF"
+                color: "#0069d9"
                 radius: 8
+                border.width: 0
             }
             contentItem: Text {
                 text: parent.text
-                color: enabled ? "white" : "#E0F0FF"
+                color: "white"
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 font: parent.font

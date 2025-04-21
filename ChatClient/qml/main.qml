@@ -44,10 +44,46 @@ ApplicationWindow {
                     TabButton {
                         text: "登录"
                         width: implicitWidth
+                        contentItem: Text {
+                            text: parent.text
+                            color: parent.checked ? "#0069d9" : "#6C757D"
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            font.pixelSize: 15
+                            font.bold: parent.checked
+                        }
+                        background: Rectangle {
+                            color: parent.checked ? "#E7F1FF" : "transparent"
+                            Rectangle {
+                                visible: parent.parent.checked
+                                color: "#0069d9"
+                                height: 2
+                                width: parent.width
+                                anchors.bottom: parent.bottom
+                            }
+                        }
                     }
                     TabButton {
                         text: "注册"
                         width: implicitWidth
+                        contentItem: Text {
+                            text: parent.text
+                            color: parent.checked ? "#0069d9" : "#6C757D"
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            font.pixelSize: 15
+                            font.bold: parent.checked
+                        }
+                        background: Rectangle {
+                            color: parent.checked ? "#E7F1FF" : "transparent"
+                            Rectangle {
+                                visible: parent.parent.checked
+                                color: "#0069d9"
+                                height: 2
+                                width: parent.width
+                                anchors.bottom: parent.bottom
+                            }
+                        }
                     }
                 }
 
