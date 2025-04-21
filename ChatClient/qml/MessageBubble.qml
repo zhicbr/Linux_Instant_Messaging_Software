@@ -29,7 +29,7 @@ Rectangle {
         }
 
         Rectangle {
-            Layout.preferredWidth: Math.min(implicitWidth, parent.width * 0.75)
+            Layout.preferredWidth: Math.min(messageText.implicitWidth + 20, parent.width * 0.8)
             Layout.alignment: isSelf ? Qt.AlignRight : Qt.AlignLeft
             implicitWidth: messageText.implicitWidth + 20
             implicitHeight: messageText.implicitHeight + 20
@@ -41,9 +41,14 @@ Rectangle {
                 text: content
                 color: isSelf ? "white" : "#212529"
                 font.pixelSize: 15
-                wrapMode: Text.Wrap
-                anchors.centerIn: parent
-                width: Math.min(implicitWidth, parent.width * 0.75 - 20)
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                width: Math.min(implicitWidth, parent.parent.width * 0.8 - 20)
+                anchors {
+                    left: parent.left
+                    right: parent.right
+                    margins: 10
+                    verticalCenter: parent.verticalCenter
+                }
             }
         }
 
