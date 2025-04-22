@@ -3,7 +3,7 @@ import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 
 Rectangle {
-    color: "#F8F9FA"
+    color: theme.backgroundColor
 
     RowLayout {
         anchors.fill: parent
@@ -13,8 +13,8 @@ Rectangle {
         Rectangle {
             Layout.preferredWidth: 250
             Layout.fillHeight: true
-            color: "#E9ECEF"
-            border.color: "#DEE2E6"
+            color: theme.sidebarColor
+            border.color: theme.borderColor
             border.width: 1
 
             ColumnLayout {
@@ -32,7 +32,7 @@ Rectangle {
                         Layout.fillWidth: true
                         font.pixelSize: 13
                         background: Rectangle {
-                            color: parent.pressed ? "#0062cc" : "#0069d9"
+                            color: parent.pressed ? theme.primaryButtonPressedColor : theme.primaryButtonColor
                             radius: 6
                             border.width: 0
                         }
@@ -51,7 +51,7 @@ Rectangle {
                         Layout.fillWidth: true
                         font.pixelSize: 13
                         background: Rectangle {
-                            color: parent.pressed ? "#138496" : "#17a2b8"
+                            color: parent.pressed ? theme.successButtonPressedColor : theme.successButtonColor
                             radius: 6
                             border.width: 0
                         }
@@ -73,7 +73,7 @@ Rectangle {
                         Layout.fillWidth: true
                         font.pixelSize: 13
                         background: Rectangle {
-                            color: parent.pressed ? "#c82333" : "#dc3545"
+                            color: parent.pressed ? theme.dangerButtonPressedColor : theme.dangerButtonColor
                             radius: 6
                             border.width: 0
                         }
@@ -97,11 +97,13 @@ Rectangle {
                         Layout.fillWidth: true
                         placeholderText: "搜索或添加好友..."
                         font.pixelSize: 13
+                        color: theme.primaryTextColor
+                        placeholderTextColor: theme.secondaryTextColor
                         background: Rectangle {
-                            border.color: searchField.activeFocus ? "#80BDFF" : "#CED4DA"
+                            border.color: searchField.activeFocus ? theme.inputFocusBorderColor : theme.inputBorderColor
                             border.width: 1
                             radius: 15
-                            color: "#FFFFFF"
+                            color: theme.inputBackgroundColor
                         }
                     }
                     Button {
@@ -110,7 +112,7 @@ Rectangle {
                         Layout.preferredHeight: 30
                         font.bold: true
                         background: Rectangle {
-                            color: parent.pressed ? "#0056b3" : "#007BFF"
+                            color: parent.pressed ? theme.primaryButtonPressedColor : theme.primaryButtonColor
                             radius: 15
                         }
                         contentItem: Text {
@@ -128,7 +130,7 @@ Rectangle {
                     Layout.fillWidth: true
                     font.pixelSize: 13
                     background: Rectangle {
-                        color: parent.pressed ? "#5A6268" : "#6C757D"
+                        color: parent.pressed ? theme.secondaryButtonPressedColor : theme.secondaryButtonColor
                         radius: 6
                     }
                     contentItem: Text {
@@ -192,8 +194,8 @@ Rectangle {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 60
-                color: "#F8F9FA"
-                border.color: "#DEE2E6"
+                color: theme.backgroundColor
+                border.color: theme.borderColor
                 border.width: 1
 
                 RowLayout {

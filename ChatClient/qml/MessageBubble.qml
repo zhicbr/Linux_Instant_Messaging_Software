@@ -23,7 +23,7 @@ Rectangle {
             text: isSelf ? "" : sender
             font.pixelSize: 13
             font.bold: true
-            color: "#495057"
+            color: theme.primaryTextColor
             visible: !isSelf
             Layout.alignment: Qt.AlignLeft
         }
@@ -33,13 +33,13 @@ Rectangle {
             Layout.alignment: isSelf ? Qt.AlignRight : Qt.AlignLeft
             implicitWidth: messageText.implicitWidth + 20
             implicitHeight: messageText.implicitHeight + 20
-            color: isSelf ? "#007BFF" : "#E9ECEF"
+            color: isSelf ? theme.selfMessageBubbleColor : theme.otherMessageBubbleColor
             radius: 20
 
             Text {
                 id: messageText
                 text: content
-                color: isSelf ? "white" : "#212529"
+                color: isSelf ? theme.selfMessageTextColor : theme.otherMessageTextColor
                 font.pixelSize: 15
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 width: Math.min(implicitWidth, parent.parent.width * 0.8 - 20)
@@ -55,7 +55,7 @@ Rectangle {
         Text {
             text: timestamp
             font.pixelSize: 11
-            color: "#868E96"
+            color: theme.secondaryTextColor
             Layout.alignment: isSelf ? Qt.AlignRight : Qt.AlignLeft
         }
     }

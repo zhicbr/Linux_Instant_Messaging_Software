@@ -3,9 +3,9 @@ import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 
 Rectangle {
-    color: "#FFFFFF"
+    color: theme.inputBackgroundColor
     radius: 12
-    border.color: "#E9ECEF"
+    border.color: theme.borderColor
     border.width: 1
 
     ColumnLayout {
@@ -17,19 +17,21 @@ Rectangle {
             text: "电子邮件"
             font.pixelSize: 13
             font.bold: true
-            color: "#495057"
+            color: theme.primaryTextColor
         }
         TextField {
             id: emailField
             Layout.fillWidth: true
             placeholderText: "输入您的电子邮件"
             font.pixelSize: 15
+            color: theme.primaryTextColor
+            placeholderTextColor: theme.secondaryTextColor
             inputMethodHints: Qt.ImhEmailCharactersOnly
             background: Rectangle {
-                border.color: emailField.activeFocus ? "#80BDFF" : "#CED4DA"
+                border.color: emailField.activeFocus ? theme.inputFocusBorderColor : theme.inputBorderColor
                 border.width: 1
                 radius: 6
-                color: "#FFFFFF"
+                color: theme.inputBackgroundColor
             }
         }
 
@@ -37,18 +39,20 @@ Rectangle {
             text: "用户名"
             font.pixelSize: 13
             font.bold: true
-            color: "#495057"
+            color: theme.primaryTextColor
         }
         TextField {
             id: nicknameField
             Layout.fillWidth: true
-            placeholderText: "选择一个用户名"
+            placeholderText: "设置您的用户名"
             font.pixelSize: 15
+            color: theme.primaryTextColor
+            placeholderTextColor: theme.secondaryTextColor
             background: Rectangle {
-                border.color: nicknameField.activeFocus ? "#80BDFF" : "#CED4DA"
+                border.color: nicknameField.activeFocus ? theme.inputFocusBorderColor : theme.inputBorderColor
                 border.width: 1
                 radius: 6
-                color: "#FFFFFF"
+                color: theme.inputBackgroundColor
             }
         }
 
@@ -56,19 +60,21 @@ Rectangle {
             text: "密码"
             font.pixelSize: 13
             font.bold: true
-            color: "#495057"
+            color: theme.primaryTextColor
         }
         TextField {
             id: passwordField
             Layout.fillWidth: true
-            placeholderText: "创建密码"
+            placeholderText: "设置您的密码"
             echoMode: TextInput.Password
             font.pixelSize: 15
+            color: theme.primaryTextColor
+            placeholderTextColor: theme.secondaryTextColor
             background: Rectangle {
-                border.color: passwordField.activeFocus ? "#80BDFF" : "#CED4DA"
+                border.color: passwordField.activeFocus ? theme.inputFocusBorderColor : theme.inputBorderColor
                 border.width: 1
                 radius: 6
-                color: "#FFFFFF"
+                color: theme.inputBackgroundColor
             }
         }
 
@@ -80,7 +86,7 @@ Rectangle {
             font.pixelSize: 15
             font.bold: true
             background: Rectangle {
-                color: "#0069d9"
+                color: theme.primaryButtonColor
                 radius: 8
                 border.width: 0
             }

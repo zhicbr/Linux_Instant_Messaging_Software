@@ -3,7 +3,7 @@ import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 
 Rectangle {
-    color: "#F8F9FA"
+    color: theme.backgroundColor
 
     RowLayout {
         anchors.fill: parent
@@ -13,8 +13,8 @@ Rectangle {
         Rectangle {
             Layout.preferredWidth: 250
             Layout.fillHeight: true
-            color: "#E9ECEF"
-            border.color: "#DEE2E6"
+            color: theme.sidebarColor
+            border.color: theme.borderColor
             border.width: 1
 
             ColumnLayout {
@@ -32,7 +32,7 @@ Rectangle {
                         Layout.fillWidth: true
                         font.pixelSize: 13
                         background: Rectangle {
-                            color: parent.pressed ? "#5A6268" : "#6C757D"
+                            color: parent.pressed ? theme.secondaryButtonPressedColor : theme.secondaryButtonColor
                             radius: 6
                             border.width: 0
                         }
@@ -54,7 +54,7 @@ Rectangle {
                         Layout.fillWidth: true
                         font.pixelSize: 13
                         background: Rectangle {
-                            color: parent.pressed ? "#0062cc" : "#0069d9"
+                            color: parent.pressed ? theme.primaryButtonPressedColor : theme.primaryButtonColor
                             radius: 6
                             border.width: 0
                         }
@@ -75,7 +75,7 @@ Rectangle {
                 Rectangle {
                     Layout.fillWidth: true
                     height: 30
-                    color: "#DEE2E6"
+                    color: theme.borderColor
                     
                     RowLayout {
                         anchors.fill: parent
@@ -85,6 +85,7 @@ Rectangle {
                             text: "我的群聊"
                             font.bold: true
                             font.pixelSize: 14
+                            color: theme.primaryTextColor
                         }
                         
                         Item { Layout.fillWidth: true }
@@ -95,7 +96,7 @@ Rectangle {
                             Layout.preferredHeight: 24
                             font.pixelSize: 12
                             background: Rectangle {
-                                color: parent.pressed ? "#5A6268" : "#6C757D"
+                                color: parent.pressed ? theme.secondaryButtonPressedColor : theme.secondaryButtonColor
                                 radius: 4
                             }
                             contentItem: Text {
@@ -120,7 +121,9 @@ Rectangle {
                     delegate: Rectangle {
                         width: groupListView.width
                         height: 50
-                        color: chatWindow.currentChatGroup === modelData.split(':')[0] ? "#CED4DA" : "#F8F9FA"
+                        color: chatWindow.currentChatGroup === modelData.split(':')[0] ? 
+                            (appSettings.darkTheme ? "#3B4252" : "#CED4DA") : 
+                            (appSettings.darkTheme ? theme.sidebarColor : "#F8F9FA")
                         
                         RowLayout {
                             anchors.fill: parent
@@ -131,14 +134,14 @@ Rectangle {
                                 Layout.preferredWidth: 34
                                 Layout.preferredHeight: 34
                                 radius: 17
-                                color: "#28A745"
+                                color: appSettings.darkTheme ? "#A6E3A1" : "#28A745"
                                 
                                 Text {
                                     anchors.centerIn: parent
                                     text: modelData.split(':')[1].charAt(0).toUpperCase()
                                     font.pixelSize: 16
                                     font.bold: true
-                                    color: "white"
+                                    color: appSettings.darkTheme ? "#1E1E2E" : "white"
                                 }
                             }
                             
@@ -146,6 +149,7 @@ Rectangle {
                                 Layout.fillWidth: true
                                 text: modelData.split(':')[1]
                                 font.pixelSize: 14
+                                color: theme.primaryTextColor
                                 elide: Text.ElideRight
                             }
                         }
@@ -174,8 +178,8 @@ Rectangle {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 40
-                color: "#E9ECEF"
-                border.color: "#DEE2E6"
+                color: theme.sidebarColor
+                border.color: theme.borderColor
                 
                 RowLayout {
                     anchors.fill: parent
@@ -188,6 +192,7 @@ Rectangle {
                             chatWindow.getGroupName(chatWindow.currentChatGroup) : "请选择一个群聊"
                         font.pixelSize: 16
                         font.bold: true
+                        color: theme.primaryTextColor
                     }
                 }
             }
@@ -213,8 +218,8 @@ Rectangle {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 60
-                color: "#F8F9FA"
-                border.color: "#DEE2E6"
+                color: theme.backgroundColor
+                border.color: theme.borderColor
                 border.width: 1
 
                 RowLayout {
@@ -228,10 +233,13 @@ Rectangle {
                         placeholderText: "输入消息..."
                         font.pixelSize: 14
                         enabled: chatWindow.isGroupChat
+                        color: theme.primaryTextColor
+                        placeholderTextColor: theme.secondaryTextColor
                         background: Rectangle {
-                            border.color: messageInput.activeFocus ? "#80BDFF" : "#CED4DA"
+                            border.color: messageInput.activeFocus ? theme.inputFocusBorderColor : theme.inputBorderColor
                             border.width: 1
                             radius: 4
+                            color: theme.inputBackgroundColor
                         }
                         Keys.onReturnPressed: {
                             if (text.trim() !== "" && chatWindow.isGroupChat) {
@@ -247,7 +255,9 @@ Rectangle {
                         font.pixelSize: 14
                         enabled: chatWindow.isGroupChat
                         background: Rectangle {
-                            color: parent.enabled ? (parent.pressed ? "#0056b3" : "#007BFF") : "#B0B0B0"
+                            color: parent.enabled ? 
+                                (parent.pressed ? theme.primaryButtonPressedColor : theme.primaryButtonColor) : 
+                                (appSettings.darkTheme ? "#45475A" : "#B0B0B0")
                             radius: 4
                         }
                         contentItem: Text {
@@ -271,8 +281,8 @@ Rectangle {
         Rectangle {
             Layout.preferredWidth: 200
             Layout.fillHeight: true
-            color: "#E9ECEF"
-            border.color: "#DEE2E6"
+            color: theme.sidebarColor
+            border.color: theme.borderColor
             border.width: 1
             visible: chatWindow.isGroupChat
             
@@ -285,6 +295,7 @@ Rectangle {
                     text: "群成员"
                     font.bold: true
                     font.pixelSize: 16
+                    color: theme.primaryTextColor
                 }
                 
                 ListView {
@@ -297,7 +308,7 @@ Rectangle {
                     delegate: Rectangle {
                         width: membersListView.width
                         height: 40
-                        color: "#F8F9FA"
+                        color: appSettings.darkTheme ? theme.inputBackgroundColor : "#F8F9FA"
                         
                         RowLayout {
                             anchors.fill: parent
@@ -308,14 +319,16 @@ Rectangle {
                                 Layout.preferredWidth: 30
                                 Layout.preferredHeight: 30
                                 radius: 15
-                                color: chatWindow.isFriendOnline(modelData) ? "#28A745" : "#6C757D"
+                                color: chatWindow.isFriendOnline(modelData) ? 
+                                    (appSettings.darkTheme ? "#A6E3A1" : "#28A745") : 
+                                    (appSettings.darkTheme ? "#A6ADC8" : "#6C757D")
                                 
                                 Text {
                                     anchors.centerIn: parent
                                     text: modelData.charAt(0).toUpperCase()
                                     font.pixelSize: 14
                                     font.bold: true
-                                    color: "white"
+                                    color: appSettings.darkTheme && chatWindow.isFriendOnline(modelData) ? "#1E1E2E" : "white"
                                 }
                             }
                             
@@ -323,6 +336,7 @@ Rectangle {
                                 Layout.fillWidth: true
                                 text: modelData
                                 font.pixelSize: 13
+                                color: theme.primaryTextColor
                                 elide: Text.ElideRight
                             }
                         }
@@ -343,6 +357,26 @@ Rectangle {
         width: 400
         
         anchors.centerIn: parent
+        
+        background: Rectangle {
+            color: theme.inputBackgroundColor
+            border.color: theme.borderColor
+            border.width: 1
+            radius: 6
+        }
+        
+        header: Rectangle {
+            color: theme.sidebarColor
+            height: 50
+            
+            Text {
+                anchors.centerIn: parent
+                text: createGroupDialog.title
+                font.pixelSize: 16
+                font.bold: true
+                color: theme.primaryTextColor
+            }
+        }
         
         onAccepted: {
             // 获取选中的好友作为群成员
@@ -457,9 +491,7 @@ Rectangle {
         }
         
         function onGroupChatMessageReceived(sender, content, timestamp) {
-            // 仅当在群聊中显示
             console.log("收到群聊消息信号，发送者:", sender, "，当前是否为群聊:", chatWindow.isGroupChat);
-            // 移除条件判断，确保消息总是显示
             messageModel.append({
                 "sender": sender,
                 "content": content,
@@ -476,5 +508,13 @@ Rectangle {
         function onGroupCreated(groupName) {
             createGroupDialog.close();
         }
+    }
+
+    Component.onCompleted: {
+        chatWindow.groupChatMessageReceived.connect(onGroupChatMessageReceived);
+    }
+
+    Component.onDestruction: {
+        chatWindow.groupChatMessageReceived.disconnect(onGroupChatMessageReceived);
     }
 } 

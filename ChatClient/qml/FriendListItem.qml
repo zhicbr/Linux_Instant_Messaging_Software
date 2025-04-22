@@ -16,7 +16,11 @@ Rectangle {
     
     height: 40
     width: parent.width
-    color: selected ? "#e0e0e0" : (mainMouseArea.containsMouse ? "#f5f5f5" : "#ffffff")
+    color: selected ? 
+        (appSettings.darkTheme ? "#3B4252" : "#e0e0e0") : 
+        (mainMouseArea.containsMouse ? 
+            (appSettings.darkTheme ? "#313244" : "#f5f5f5") : 
+            theme.inputBackgroundColor)
     
     // 主区域鼠标事件
     MouseArea {
@@ -42,7 +46,9 @@ Rectangle {
             height: 8
             radius: 4
             visible: !isRequest
-            color: isOnline ? "#4CAF50" : "#9E9E9E"
+            color: isOnline ? 
+                (appSettings.darkTheme ? "#A6E3A1" : "#4CAF50") : 
+                (appSettings.darkTheme ? "#A6ADC8" : "#9E9E9E")
             Layout.alignment: Qt.AlignVCenter
         }
         
@@ -50,6 +56,7 @@ Rectangle {
         Text {
             text: friendName + (isOnline && !isRequest ? " (在线)" : "")
             font.pixelSize: 14
+            color: theme.primaryTextColor
             Layout.fillWidth: true
             elide: Text.ElideRight
         }
@@ -69,13 +76,15 @@ Rectangle {
                 text: "接受"
                 
                 background: Rectangle {
-                    color: acceptButton.pressed ? "#1976D2" : "#2196F3"
+                    color: acceptButton.pressed ? 
+                        (appSettings.darkTheme ? "#8BD5CA" : "#1976D2") : 
+                        (appSettings.darkTheme ? "#94E2D5" : "#2196F3")
                     radius: 4
                 }
                 
                 contentItem: Text {
                     text: acceptButton.text
-                    color: "white"
+                    color: appSettings.darkTheme ? "#1E1E2E" : "white"
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                 }
@@ -95,7 +104,9 @@ Rectangle {
                 text: "删除"
                 
                 background: Rectangle {
-                    color: rejectButton.pressed ? "#D32F2F" : "#f44336"
+                    color: rejectButton.pressed ? 
+                        (appSettings.darkTheme ? "#D37089" : "#D32F2F") : 
+                        (appSettings.darkTheme ? "#F38BA8" : "#f44336")
                     radius: 4
                 }
                 
