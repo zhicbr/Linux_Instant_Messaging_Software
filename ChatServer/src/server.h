@@ -46,7 +46,7 @@ private:
     void updateUserStatus(const QString &nickname, bool isOnline);
     void handleLogout(ClientInfo *clientInfo);
     void notifyFriendsStatusChange(const QString &nickname, bool isOnline);
-    void notifyFriendRequest(const QString &to, const QString &from);
+    bool notifyFriendRequest(const QString &to, const QString &from);
     bool deleteFriendRequest(const QString &from, const QString &to);
 };
 

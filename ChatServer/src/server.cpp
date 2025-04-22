@@ -94,8 +94,6 @@ void Server::handleClientData() {
                 qDebug() << "Login successful for" << nickname;
                 clientInfo->isLoggedIn = true;
                 clientInfo->nickname = nickname;
-                updateUserStatus(nickname, true);
-                notifyFriendsStatusChange(nickname, true);
                 clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Login, {{"status", "success"}})).toJson());
             } else {
                 qDebug() << "Login failed for" << nickname << ":" << loginResult;
@@ -476,6 +474,7 @@ void Server::notifyFriendsStatusChange(const QString &nickname, bool isOnline) {
     QJsonObject statusMsg;
     statusMsg["friend"] = nickname;
     statusMsg["isOnline"] = isOnline;
+    statusMsg["nickname"] = nickname;  // 添加nickname字段，确保客户端能正确识别
     QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::UserStatus, statusMsg)).toJson();
     
     for (const ClientInfo &client : clients) {
@@ -495,12 +494,12 @@ bool Server::initDatabase() {
         return false;
     }
 
-    // 先删除旧表以确保字段正确
-    QSqlQuery dropQuery(db);
-    dropQuery.exec("DROP TABLE IF EXISTS users");
-    dropQuery.exec("DROP TABLE IF EXISTS friends");
-    dropQuery.exec("DROP TABLE IF EXISTS messages");
-    dropQuery.exec("DROP TABLE IF EXISTS friend_requests");
+    // 不再删除旧表，保留数据
+    // QSqlQuery dropQuery(db);
+    // dropQuery.exec("DROP TABLE IF EXISTS users");
+    // dropQuery.exec("DROP TABLE IF EXISTS friends");
+    // dropQuery.exec("DROP TABLE IF EXISTS messages");
+    // dropQuery.exec("DROP TABLE IF EXISTS friend_requests");
 
     QSqlQuery query;
     QString createUsersTable = R"(
@@ -561,6 +560,30 @@ bool Server::initDatabase() {
         qDebug() << "Error: Failed to create friend_requests table:" << query.lastError().text();
         return false;
     }
+    
+    // 创建测试账号 (111-999)
+    for (int i = 1; i <= 9; i++) {
+        QString username = QString("%1%1%1").arg(i);
+        QString email = QString("%1@test.com").arg(username);
+        QString hashedPassword = hashPassword(username); // 密码与用户名相同
+        
+        // 使用INSERT OR IGNORE确保不会因为记录已存在而报错
+        QString insertSql = QString("INSERT OR IGNORE INTO users (email, nickname, password, is_online) "
+                                   "VALUES ('%1', '%2', '%3', 0)")
+                            .arg(email)
+                            .arg(username)
+                            .arg(hashedPassword);
+        
+        if (query.exec(insertSql)) {
+            // 检查是否真的插入了新记录
+            if (query.numRowsAffected() > 0) {
+                qDebug() << "已创建测试账号:" << username;
+            }
+        } else {
+            qDebug() << "创建测试账号失败:" << username << "- 错误:" << query.lastError().text();
+        }
+    }
+    
     return true;
 }
 
@@ -596,6 +619,14 @@ QString Server::loginUser(const QString &nickname, const QString &password, Clie
     if (storedPassword == hashPassword(password)) {
         updateUserStatus(nickname, true);
         notifyFriendsStatusChange(nickname, true);
+        
+        // 登录时检查是否有待处理的好友请求，但这里不发送给客户端
+        // 客户端登录成功后会主动请求好友请求列表
+        QStringList pendingRequests = getFriendRequests(nickname);
+        if (!pendingRequests.isEmpty()) {
+            qDebug() << "用户" << nickname << "登录成功，发现" << pendingRequests.size() << "个待处理的好友请求";
+        }
+        
         return "success";
     }
     return "Invalid password";
@@ -694,7 +725,11 @@ bool Server::sendFriendRequest(const QString &from, const QString &to) {
     query.addBindValue(to);
     if (query.exec()) {
         qDebug() << "好友请求已添加到数据库";
-        notifyFriendRequest(to, from);
+        
+        // 尝试立即通知对方（如果在线）
+        bool notified = notifyFriendRequest(to, from);
+        qDebug() << "通知状态：" << (notified ? "已通知" : "未通知（对方可能不在线）");
+        
         return true;
     } else {
         qDebug() << "添加好友请求失败：" << query.lastError().text();
@@ -788,20 +823,24 @@ QStringList Server::getFriendRequests(const QString &user) {
     return requests;
 }
 
-void Server::notifyFriendRequest(const QString &to, const QString &from) {
+bool Server::notifyFriendRequest(const QString &to, const QString &from) {
     QJsonObject notification;
     notification["from"] = from;
     QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::FriendRequest, notification)).toJson();
     
     // 遍历所有客户端，找到目标用户并发送通知
+    bool notified = false;
     for (auto it = clients.begin(); it != clients.end(); ++it) {
         if (it->isLoggedIn && it->nickname == to) {
             qDebug() << "Sending friend request notification from" << from << "to" << to;
             it->socket->write(message);
             it->socket->flush(); // 确保消息立即发送
+            notified = true;
             break;
         }
     }
+    
+    return notified; // 返回是否成功通知对方
 }
 
 bool Server::deleteFriendRequest(const QString &from, const QString &to)

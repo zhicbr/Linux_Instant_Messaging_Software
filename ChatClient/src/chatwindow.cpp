@@ -3,6 +3,7 @@
 #include <QDebug>
 #include <QDateTime>
 #include "../Common/config.h"
+#include <QTimer>
 
 ChatWindow::ChatWindow(QObject *parent)
     : QObject(parent), m_socket(new QTcpSocket(this)), m_isLoggedIn(false)
@@ -255,8 +256,10 @@ void ChatWindow::updateFriendList(const QStringList &friends)
 
 void ChatWindow::updateFriendRequests(const QStringList &requests)
 {
+    qDebug() << "执行updateFriendRequests，新列表:" << requests;
     m_friendRequests = requests;
     emit friendRequestsChanged();
+    qDebug() << "好友请求信号已发出";
 }
 
 void ChatWindow::refreshFriendRequests()
@@ -267,8 +270,11 @@ void ChatWindow::refreshFriendRequests()
     }
     if (m_socket->state() == QAbstractSocket::ConnectedState) {
         qDebug() << "发送获取好友请求列表的请求";
-        m_socket->write(QJsonDocument(MessageProtocol::createMessage(
-            MessageType::GetFriendRequests, QJsonObject())).toJson());
+        QJsonObject emptyData;
+        QByteArray request = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::GetFriendRequests, emptyData)).toJson();
+        qDebug() << "原始请求数据: " << request;
+        m_socket->write(request);
         m_socket->flush(); // 确保消息立即发送
     } else {
         qDebug() << "Socket未连接，无法刷新好友请求";
@@ -341,9 +347,22 @@ void ChatWindow::handleServerData()
                 clearChatDisplay();
                 m_currentChatFriend.clear();
                 emit currentChatFriendChanged();
-                // 请求好友列表
+                
+                // 请求好友列表 - 先发送这个请求并等待一小段时间确保消息被发送
                 m_socket->write(QJsonDocument(MessageProtocol::createMessage(
                     MessageType::GetFriendList, {})).toJson());
+                m_socket->flush();
+                
+                // 等待一小段时间，确保两个请求不会合并在一起
+                QTimer::singleShot(100, this, [this]() {
+                    // 在短暂延迟后请求好友请求列表
+                    if(m_socket && m_socket->state() == QAbstractSocket::ConnectedState && m_isLoggedIn) {
+                        qDebug() << "延迟发送获取好友请求列表请求";
+                        m_socket->write(QJsonDocument(MessageProtocol::createMessage(
+                            MessageType::GetFriendRequests, {})).toJson());
+                        m_socket->flush();
+                    }
+                });
             } else {
                 emit statusMessage("登录失败：" + msgData.value("reason").toString("未知错误"));
             }
@@ -468,16 +487,21 @@ void ChatWindow::handleServerData()
             if (msgData["status"].toString() == "success") {
                 QStringList requests;
                 QJsonArray requestArray = msgData["requests"].toArray();
+                qDebug() << "原始请求数组：" << requestArray;
                 for (const QJsonValue &value : requestArray) {
                     requests << value.toString();
+                    qDebug() << "添加请求：" << value.toString();
                 }
                 qDebug() << "更新好友请求列表：" << requests;
                 if (m_friendRequests != requests) {
+                    qDebug() << "旧请求列表：" << m_friendRequests;
                     updateFriendRequests(requests);
                     qDebug() << "好友请求列表已更新！";
                 } else {
                     qDebug() << "好友请求列表未变化，不更新。";
                 }
+            } else {
+                qDebug() << "获取好友请求列表失败：" << msgData["reason"].toString("未知错误");
             }
             break;
 

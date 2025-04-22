@@ -223,3 +223,59 @@ resources.qrc 添加        <file>qml/SettingsPage.qml</file>
 ## 注意
 不要用c++的关键字作为参数名
 
+
+## 数据库
+
+由于创建表时有"如果这张表不存在才创建"的逻辑，所以，如果项目里有user.db这个文件，表就一直存在，哪怕后来更新了表结构，也无法改变。
+所以，改动表结构，或者预设置数据，都要先清除db文件。
+
+
+
+## Bug解决记录
+
+### 1. 离线好友请求不显示问题
+
+**问题描述**：
+当用户A向离线用户B发送好友请求，然后用户B登录后，无法看到来自用户A的好友请求。
+
+**原因分析**：
+1. **消息合并问题**：客户端登录成功后会连续发送两个请求：获取好友列表(GetFriendList)和获取好友请求列表(GetFriendRequests)。由于这两个请求被连续发送且没有任何延迟，它们在网络传输过程中被合并成了一个完整消息包。
+
+2. **消息解析失败**：服务器在接收到这个合并的消息包后，只能成功解析第一个请求(GetFriendList)，而无法解析第二个请求(GetFriendRequests)，导致服务器报错"Failed to parse message"，从而无法返回好友请求列表。
+
+3. **日志显示**：在服务器日志中可以清楚地看到该问题：
+   ```
+   Received data: {"data": {}, "type": 6}\n{"data": {}, "type": 14}
+   Failed to parse message: {"data": {}, "type": 6}\n{"data": {}, "type": 14}
+   ```
+   其中type=6是GetFriendList请求，type=14是GetFriendRequests请求。
+
+**解决方案**：
+1. 使用`QTimer::singleShot`添加短暂延迟，确保两个请求是分开发送的：
+   ```cpp
+   // 先发送获取好友列表请求
+   m_socket->write(QJsonDocument(MessageProtocol::createMessage(
+       MessageType::GetFriendList, {})).toJson());
+   m_socket->flush();
+   
+   // 延迟100毫秒后发送获取好友请求列表请求
+   QTimer::singleShot(100, this, [this]() {
+       if(m_socket && m_socket->state() == QAbstractSocket::ConnectedState && m_isLoggedIn) {
+           m_socket->write(QJsonDocument(MessageProtocol::createMessage(
+               MessageType::GetFriendRequests, {})).toJson());
+           m_socket->flush();
+       }
+   });
+   ```
+
+2. 确保`socket->flush()`被调用，促使消息立即发送，避免缓冲区积累。
+
+**教训**：
+1. 在发送连续请求时，考虑TCP协议的特性，多个紧挨着的小数据包可能会合并成一个大数据包传输，需要适当添加延迟。
+2. 服务器端消息解析逻辑需要更加健壮，能够处理合并的消息或提供明确的错误提示。
+3. 完善日志系统对于此类问题的排查至关重要，从日志中能直观地看出消息被合并的情况。
+
+
+
+
+
