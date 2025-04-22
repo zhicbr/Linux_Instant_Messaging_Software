@@ -275,6 +275,82 @@ resources.qrc 添加        <file>qml/SettingsPage.qml</file>
 2. 服务器端消息解析逻辑需要更加健壮，能够处理合并的消息或提供明确的错误提示。
 3. 完善日志系统对于此类问题的排查至关重要，从日志中能直观地看出消息被合并的情况。
 
+### 2. 群聊消息不显示问题
+
+**问题描述**：
+在群聊页面中，无论是发送新消息还是加载历史消息，群聊消息都不会显示在聊天框中。
+
+**原因分析**：
+1. **信号连接不匹配**：在`GroupChatPage.qml`中，`onGroupChatMessageReceived`函数包含了条件判断`if (chatWindow.isGroupChat)`，但在某些情况下`isGroupChat`属性可能未正确设置。
+
+2. **状态切换不完整**：在`selectFriend`函数中没有正确重置`m_isGroupChat`属性，导致从群聊切换到一对一聊天后，再次进入群聊时状态混乱。
+
+3. **消息类型混用**：群聊历史记录处理中使用了普通的`appendMessage`函数而不是专用的群聊消息信号，导致消息无法正确路由到群聊界面。
+
+**解决方案**：
+1. 修改`GroupChatPage.qml`中的信号处理函数，移除不必要的条件判断：
+   ```qml
+   function onGroupChatMessageReceived(sender, content, timestamp) {
+       // 移除条件判断，确保消息总是显示
+       console.log("收到群聊消息信号，发送者:", sender, "，当前是否为群聊:", chatWindow.isGroupChat);
+       messageModel.append({
+           "sender": sender,
+           "content": content,
+           "timestamp": timestamp
+       });
+       console.log("添加群聊消息到列表");
+   }
+   ```
+
+2. 完善`selectFriend`函数，确保在切换到一对一聊天时正确重置群聊状态：
+   ```cpp
+   void ChatWindow::selectFriend(const QString &friendName)
+   {
+       if (friendName != m_currentChatFriend || m_isGroupChat) {
+           // 清除群聊状态
+           m_currentChatGroup.clear();
+           m_isGroupChat = false;
+           emit isGroupChatChanged();
+           emit currentChatGroupChanged();
+           
+           // 设置一对一聊天状态
+           m_currentChatFriend = friendName;
+           emit currentChatFriendChanged();
+           clearChatDisplay();
+           loadChatHistory(friendName);
+       }
+   }
+   ```
+
+3. 修改群聊历史记录处理，使用专用的群聊消息信号：
+   ```cpp
+   case MessageType::GroupChatHistory:
+       if (msgData["status"].toString() == "success") {
+           clearChatDisplay();
+           QJsonArray messages = msgData["messages"].toArray();
+           if (messages.isEmpty()) {
+               // 使用群聊消息信号显示空消息提示
+               emit groupChatMessageReceived("系统", "尚无群聊消息记录。", "");
+           } else {
+               for (const QJsonValue &msgValue : messages) {
+                   QJsonObject msgObj = msgValue.toObject();
+                   QString sender = msgObj["from"].toString();
+                   QString content = msgObj["content"].toString();
+                   QString timestamp = msgObj.contains("timestamp") ? 
+                       msgObj["timestamp"].toString() : QDateTime::currentDateTime().toString("hh:mm");
+                   // 使用群聊消息信号而不是普通消息信号
+                   emit groupChatMessageReceived(sender, content, timestamp);
+               }
+           }
+       }
+   ```
+
+**教训**：
+1. 在实现多种聊天模式（如一对一聊天和群聊）时，需要确保状态切换的完整性和一致性。
+2. 针对不同类型的消息，应使用专门的信号和处理逻辑，避免混用导致路由错误。
+3. 添加适当的调试日志对于排查UI显示问题非常重要，特别是在信号-槽机制的调试中。
+4. 在QML和C++交互中，需要确保属性变化正确触发相应的信号以更新UI状态。
+
 
 
 

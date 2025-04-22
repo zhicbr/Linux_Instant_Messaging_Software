@@ -47,6 +47,28 @@ Rectangle {
                     }
 
                     Button {
+                        text: "群聊"
+                        Layout.fillWidth: true
+                        font.pixelSize: 13
+                        background: Rectangle {
+                            color: parent.pressed ? "#138496" : "#17a2b8"
+                            radius: 6
+                            border.width: 0
+                        }
+                        contentItem: Text {
+                            text: parent.text
+                            color: "white"
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            font: parent.font
+                        }
+                        onClicked: {
+                            chatWindow.refreshGroupList();
+                            stackView.push(groupChatPage);
+                        }
+                    }
+
+                    Button {
                         text: "登出"
                         Layout.fillWidth: true
                         font.pixelSize: 13

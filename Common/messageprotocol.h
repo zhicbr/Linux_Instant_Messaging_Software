@@ -4,22 +4,33 @@
 #include <QJsonObject>
 #include <QString>
 
-enum class MessageType {
-    Login,
-    Chat,
-    Register,
-    Error,
-    SearchUser,
-    AddFriend,
-    GetFriendList,
-    GetChatHistory,
-    Logout,
-    UserStatus,
-    FriendRequest,      // 发送好友请求
-    AcceptFriend,       // 接受好友请求
-    DeleteFriend,       // 删除好友
-    DeleteFriendRequest,// 删除好友请求
-    GetFriendRequests   // 获取好友请求列表
+// 定义消息类型
+enum MessageType {
+    // 用户登录注册消息
+    Register = 1,       // 注册
+    Login = 2,          // 登录
+    Logout = 3,         // 注销
+    Message = 4,        // 聊天消息
+    ChatHistory = 5,    // 聊天历史
+    FriendList = 6,     // 好友列表
+
+    // 用户搜索和好友请求
+    SearchUser = 7,     // 搜索用户
+    SearchResult = 8,   // 搜索结果
+    AddFriend = 9,      // 添加好友请求
+    AcceptFriend = 10,  // 接受好友请求
+    FriendStatus = 11,  // 好友状态变更
+    DeleteFriend = 12,  // 删除好友
+    FriendRequest = 13, // 好友请求通知
+    FriendRequestList = 14, // 好友请求列表
+    DeleteFriendRequest = 15, // 删除好友请求
+
+    // 群聊相关消息类型
+    CreateGroup = 16,   // 创建群聊
+    GroupList = 17,     // 获取群聊列表
+    GroupMembers = 18,  // 获取群成员列表
+    GroupChat = 19,     // 群聊消息
+    GroupChatHistory = 20 // 群聊历史记录
 };
 
 class MessageProtocol {
@@ -31,20 +42,24 @@ public:
     static QString messageTypeToString(MessageType type) {
         switch (type) {
             case MessageType::Login: return "Login";
-            case MessageType::Chat: return "Chat";
+            case MessageType::Message: return "Message";
             case MessageType::Register: return "Register";
-            case MessageType::Error: return "Error";
             case MessageType::SearchUser: return "SearchUser";
             case MessageType::AddFriend: return "AddFriend";
-            case MessageType::GetFriendList: return "GetFriendList";
-            case MessageType::GetChatHistory: return "GetChatHistory";
+            case MessageType::FriendList: return "FriendList";
+            case MessageType::ChatHistory: return "ChatHistory";
             case MessageType::Logout: return "Logout";
-            case MessageType::UserStatus: return "UserStatus";
+            case MessageType::FriendStatus: return "FriendStatus";
             case MessageType::FriendRequest: return "FriendRequest";
             case MessageType::AcceptFriend: return "AcceptFriend";
             case MessageType::DeleteFriend: return "DeleteFriend";
             case MessageType::DeleteFriendRequest: return "DeleteFriendRequest";
-            case MessageType::GetFriendRequests: return "GetFriendRequests";
+            case MessageType::FriendRequestList: return "FriendRequestList";
+            case MessageType::CreateGroup: return "CreateGroup";
+            case MessageType::GroupList: return "GroupList";
+            case MessageType::GroupMembers: return "GroupMembers";
+            case MessageType::GroupChat: return "GroupChat";
+            case MessageType::GroupChatHistory: return "GroupChatHistory";
             default: return "Unknown";
         }
     }

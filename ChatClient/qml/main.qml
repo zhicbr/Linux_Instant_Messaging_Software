@@ -109,6 +109,11 @@ ApplicationWindow {
         SettingsPage {}
     }
 
+    Component {
+        id: groupChatPage
+        GroupChatPage {}
+    }
+
     Connections {
         target: chatWindow
         function onIsLoggedInChanged() {

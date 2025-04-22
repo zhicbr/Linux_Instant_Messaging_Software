@@ -8,5 +8,6 @@
         <file>qml/FriendListItem.qml</file>
         <file>qml/SettingsPage.qml</file>
         <file>qml/FriendList.qml</file>
+        <file>qml/GroupChatPage.qml</file>
     </qresource>
 </RCC>

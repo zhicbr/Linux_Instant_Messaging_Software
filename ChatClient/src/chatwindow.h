@@ -16,6 +16,10 @@ class ChatWindow : public QObject {
     Q_PROPERTY(QStringList friendList READ getFriendList NOTIFY friendListUpdated)
     Q_PROPERTY(QStringList friendRequests READ getFriendRequests NOTIFY friendRequestsChanged)
     Q_PROPERTY(QVariantMap friendOnlineStatus READ getFriendOnlineStatus NOTIFY friendOnlineStatusChanged)
+    Q_PROPERTY(QStringList groupList READ getGroupList NOTIFY groupListUpdated)
+    Q_PROPERTY(QStringList groupMembers READ getGroupMembers NOTIFY groupMembersUpdated)
+    Q_PROPERTY(QString currentChatGroup READ currentChatGroup NOTIFY currentChatGroupChanged)
+    Q_PROPERTY(bool isGroupChat READ isGroupChat NOTIFY isGroupChatChanged)
 
 public:
     explicit ChatWindow(QObject *parent = nullptr);
@@ -28,6 +32,10 @@ public:
     QStringList getFriendList() const { return m_friendList; }
     QStringList getFriendRequests() const { return m_friendRequests; }
     QVariantMap getFriendOnlineStatus() const { return m_friendOnlineStatus; }
+    QStringList getGroupList() const { return m_groupList; }
+    QStringList getGroupMembers() const { return m_currentGroupMembers; }
+    QString currentChatGroup() const { return m_currentChatGroup; }
+    bool isGroupChat() const { return m_isGroupChat; }
 
     // QML 可调用的方法
     Q_INVOKABLE void login(const QString &nickname, const QString &password);
@@ -41,6 +49,15 @@ public:
     Q_INVOKABLE void deleteFriend(const QString &friendName);
     Q_INVOKABLE void logout();
     Q_INVOKABLE bool isFriendOnline(const QString &friendName) const;
+    
+    // 群聊相关方法
+    Q_INVOKABLE void createGroup(const QString &groupName, const QStringList &members);
+    Q_INVOKABLE void refreshGroupList();
+    Q_INVOKABLE void selectGroup(const QString &groupId);
+    Q_INVOKABLE void sendGroupMessage(const QString &content);
+    Q_INVOKABLE void getGroupMembers(const QString &groupId);
+    Q_INVOKABLE QString getGroupName(const QString &groupId) const;
+    Q_INVOKABLE void clearChatType();
 
     // 更新 QML 界面的方法
     Q_INVOKABLE void appendMessage(const QString &sender, const QString &content, const QString &timestamp);
@@ -48,6 +65,8 @@ public:
     Q_INVOKABLE void setStatusMessage(const QString &message);
     Q_INVOKABLE void updateFriendList(const QStringList &friends);
     Q_INVOKABLE void updateFriendRequests(const QStringList &requests);
+    Q_INVOKABLE void updateGroupList(const QStringList &groups);
+    Q_INVOKABLE void updateGroupMembers(const QStringList &members);
 
 signals:
     void isLoggedInChanged();
@@ -62,6 +81,12 @@ signals:
     void friendRequestAccepted(const QString &friendName);
     void friendDeleted(const QString &friendName);
     void friendOnlineStatusChanged();
+    void groupListUpdated();
+    void groupMembersUpdated();
+    void currentChatGroupChanged();
+    void isGroupChatChanged();
+    void groupCreated(const QString &groupName);
+    void groupChatMessageReceived(const QString &sender, const QString &content, const QString &timestamp);
 
 private slots:
     void handleServerData();
@@ -72,6 +97,8 @@ private slots:
     // 添加新的消息处理函数
     void handleAcceptFriendMessage(const QJsonObject &msgData);
     void handleDeleteFriendRequestMessage(const QJsonObject &msgData);
+    void handleGroupChatMessage(const QJsonObject &msgData);
+    void handleCreateGroupMessage(const QJsonObject &msgData);
 
 private:
     QTcpSocket *m_socket;
@@ -81,10 +108,18 @@ private:
     QStringList m_friendList;
     QStringList m_friendRequests;
     QVariantMap m_friendOnlineStatus;
+    
+    // 群聊相关属性
+    QStringList m_groupList;             // 格式: "groupId:groupName"
+    QMap<QString, QString> m_groupNames; // groupId -> groupName
+    QStringList m_currentGroupMembers;
+    QString m_currentChatGroup;
+    bool m_isGroupChat = false;
 
     void loadChatHistory(const QString &friendName);
     void refreshFriendRequests();
     void updateFriendOnlineStatus(const QString &friendName, bool isOnline);
+    void loadGroupChatHistory(const QString &groupId);
 };
 
 #endif // CHATWINDOW_H

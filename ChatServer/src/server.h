@@ -48,6 +48,15 @@ private:
     void notifyFriendsStatusChange(const QString &nickname, bool isOnline);
     bool notifyFriendRequest(const QString &to, const QString &from);
     bool deleteFriendRequest(const QString &from, const QString &to);
+    
+    // 群聊相关函数
+    bool createGroup(const QString &creator, const QString &groupName, const QStringList &members);
+    QStringList getGroupList(const QString &user);
+    QStringList getGroupMembers(int groupId);
+    bool saveGroupChatMessage(int groupId, const QString &from, const QString &content);
+    QJsonArray getGroupChatHistory(int groupId);
+    bool notifyGroupMessage(int groupId, const QString &from, const QString &content);
+    bool notifyGroupCreation(const QString &member, int groupId, const QString &groupName, const QString &creator);
 };
 
 #endif

@@ -96,7 +96,7 @@ void ChatWindow::sendMessage(const QString &content)
         {"content", message}
     };
     if (m_socket->state() == QAbstractSocket::ConnectedState) {
-        m_socket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Chat, data)).toJson());
+        m_socket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Message, data)).toJson());
         // 立即在本地显示消息
         QString timestamp = QDateTime::currentDateTime().toString("hh:mm");
         appendMessage(m_currentNickname, message, timestamp);
@@ -107,7 +107,17 @@ void ChatWindow::sendMessage(const QString &content)
 
 void ChatWindow::selectFriend(const QString &friendName)
 {
-    if (friendName != m_currentChatFriend) {
+    if (friendName != m_currentChatFriend || m_isGroupChat) {
+        qDebug() << "选择好友聊天:" << friendName << "，当前是否为群聊:" << m_isGroupChat;
+        
+        // 清除群聊状态
+        m_currentChatGroup.clear();
+        m_isGroupChat = false;
+        qDebug() << "设置isGroupChat为false，当前值:" << m_isGroupChat;
+        emit isGroupChatChanged();
+        emit currentChatGroupChanged();
+        
+        // 设置一对一聊天状态
         m_currentChatFriend = friendName;
         emit currentChatFriendChanged();
         clearChatDisplay();
@@ -272,7 +282,7 @@ void ChatWindow::refreshFriendRequests()
         qDebug() << "发送获取好友请求列表的请求";
         QJsonObject emptyData;
         QByteArray request = QJsonDocument(MessageProtocol::createMessage(
-            MessageType::GetFriendRequests, emptyData)).toJson();
+            MessageType::FriendRequestList, emptyData)).toJson();
         qDebug() << "原始请求数据: " << request;
         m_socket->write(request);
         m_socket->flush(); // 确保消息立即发送
@@ -335,6 +345,12 @@ void ChatWindow::handleServerData()
         } else if (type == MessageType::DeleteFriendRequest) {
             handleDeleteFriendRequestMessage(msgData);
             return;
+        } else if (type == MessageType::CreateGroup) {
+            handleCreateGroupMessage(msgData);
+            return;
+        } else if (type == MessageType::GroupChat && msgData.contains("from")) {
+            handleGroupChatMessage(msgData);
+            return;
         }
         
         // 处理其他消息类型
@@ -350,7 +366,7 @@ void ChatWindow::handleServerData()
                 
                 // 请求好友列表 - 先发送这个请求并等待一小段时间确保消息被发送
                 m_socket->write(QJsonDocument(MessageProtocol::createMessage(
-                    MessageType::GetFriendList, {})).toJson());
+                    MessageType::FriendList, {})).toJson());
                 m_socket->flush();
                 
                 // 等待一小段时间，确保两个请求不会合并在一起
@@ -359,7 +375,7 @@ void ChatWindow::handleServerData()
                     if(m_socket && m_socket->state() == QAbstractSocket::ConnectedState && m_isLoggedIn) {
                         qDebug() << "延迟发送获取好友请求列表请求";
                         m_socket->write(QJsonDocument(MessageProtocol::createMessage(
-                            MessageType::GetFriendRequests, {})).toJson());
+                            MessageType::FriendRequestList, {})).toJson());
                         m_socket->flush();
                     }
                 });
@@ -376,7 +392,7 @@ void ChatWindow::handleServerData()
             }
             break;
 
-        case MessageType::Chat:
+        case MessageType::Message:
             {
                 QString from = msgData.value("from").toString();
                 QString content = msgData.value("content").toString();
@@ -389,7 +405,7 @@ void ChatWindow::handleServerData()
             }
             break;
 
-        case MessageType::GetFriendList:
+        case MessageType::FriendList:
             if (msgData.value("status").toString() == "success") {
                 QStringList friends;
                 QJsonArray friendArray = msgData.value("friends").toArray();
@@ -409,7 +425,7 @@ void ChatWindow::handleServerData()
             }
             break;
 
-        case MessageType::GetChatHistory:
+        case MessageType::ChatHistory:
             if (msgData.value("status").toString() == "success") {
                 clearChatDisplay();
                 QJsonArray messages = msgData.value("messages").toArray();
@@ -442,14 +458,10 @@ void ChatWindow::handleServerData()
             if (msgData.value("status").toString() == "success") {
                 emit statusMessage("成功添加好友！");
                 m_socket->write(QJsonDocument(MessageProtocol::createMessage(
-                    MessageType::GetFriendList, {})).toJson());
+                    MessageType::FriendList, {})).toJson());
             } else {
                 emit statusMessage("添加好友失败：" + msgData.value("reason").toString("无法添加好友"));
             }
-            break;
-
-        case MessageType::Error:
-            emit statusMessage("服务器错误：" + msgData.value("reason").toString("发生未知错误"));
             break;
 
         case MessageType::Logout:
@@ -482,7 +494,7 @@ void ChatWindow::handleServerData()
             }
             break;
 
-        case MessageType::GetFriendRequests:
+        case MessageType::FriendRequestList:
             qDebug() << "收到好友请求列表响应：" << msgData;
             if (msgData["status"].toString() == "success") {
                 QStringList requests;
@@ -505,12 +517,75 @@ void ChatWindow::handleServerData()
             }
             break;
 
-        case MessageType::UserStatus: {
+        case MessageType::FriendStatus: {
             QString friendName = msgData["nickname"].toString();
             bool isOnline = msgData["online"].toBool();
             updateFriendOnlineStatus(friendName, isOnline);
             break;
         }
+
+        // 群聊相关消息处理
+        case MessageType::GroupList:
+            if (msgData["status"].toString() == "success") {
+                QStringList groups;
+                QJsonArray groupArray = msgData["groups"].toArray();
+                for (const QJsonValue &value : groupArray) {
+                    groups << value.toString();
+                }
+                groups.sort(Qt::CaseInsensitive);
+                updateGroupList(groups);
+                emit statusMessage("已更新群聊列表");
+            } else {
+                emit statusMessage("获取群聊列表失败");
+            }
+            break;
+            
+        case MessageType::GroupMembers:
+            if (msgData["status"].toString() == "success") {
+                QStringList members;
+                QJsonArray memberArray = msgData["members"].toArray();
+                for (const QJsonValue &value : memberArray) {
+                    members << value.toString();
+                }
+                members.sort(Qt::CaseInsensitive);
+                updateGroupMembers(members);
+            } else {
+                emit statusMessage("获取群成员列表失败");
+            }
+            break;
+            
+        case MessageType::GroupChat:
+            // 仅处理服务器的确认响应，实际消息在handleGroupChatMessage中处理
+            if (msgData.contains("status") && msgData["status"].toString() == "failed") {
+                emit statusMessage("发送群聊消息失败：" + msgData["reason"].toString("未知错误"));
+            }
+            break;
+            
+        case MessageType::GroupChatHistory:
+            if (msgData["status"].toString() == "success") {
+                clearChatDisplay();
+                QJsonArray messages = msgData["messages"].toArray();
+                if (messages.isEmpty()) {
+                    // 使用群聊消息信号显示空消息提示
+                    emit groupChatMessageReceived("系统", "尚无群聊消息记录。", "");
+                    qDebug() << "群聊历史为空，发送空消息提示";
+                } else {
+                    qDebug() << "收到群聊历史记录，消息数量:" << messages.size();
+                    for (const QJsonValue &msgValue : messages) {
+                        QJsonObject msgObj = msgValue.toObject();
+                        QString sender = msgObj["from"].toString();
+                        QString content = msgObj["content"].toString();
+                        QString timestamp = msgObj.contains("timestamp") ? 
+                            msgObj["timestamp"].toString() : QDateTime::currentDateTime().toString("hh:mm");
+                        // 使用群聊消息信号而不是普通消息信号
+                        emit groupChatMessageReceived(sender, content, timestamp);
+                        qDebug() << "发送群聊历史消息，发送者:" << sender << "，内容:" << content;
+                    }
+                }
+            } else {
+                emit statusMessage("无法获取群聊历史记录");
+            }
+            break;
 
         default:
             qWarning() << "未处理的消息类型：" << static_cast<int>(type);
@@ -526,7 +601,7 @@ void ChatWindow::loadChatHistory(const QString &friendName)
     if (m_socket->state() == QAbstractSocket::ConnectedState) {
         QJsonObject data{{"friend", friendName}};
         m_socket->write(QJsonDocument(MessageProtocol::createMessage(
-            MessageType::GetChatHistory, data)).toJson());
+            MessageType::ChatHistory, data)).toJson());
     } else {
         emit statusMessage("未连接到服务器，无法加载聊天记录。");
     }
@@ -561,7 +636,7 @@ void ChatWindow::handleAcceptFriendMessage(const QJsonObject &msgData)
                 qDebug() << "主动请求刷新好友列表...";
                 QJsonObject emptyData;
                 QByteArray request = QJsonDocument(MessageProtocol::createMessage(
-                    MessageType::GetFriendList, emptyData)).toJson();
+                    MessageType::FriendList, emptyData)).toJson();
                 m_socket->write(request);
                 m_socket->flush();
             }
@@ -577,13 +652,13 @@ void ChatWindow::handleAcceptFriendMessage(const QJsonObject &msgData)
                 // 请求刷新好友列表
                 QJsonObject emptyData;
                 QByteArray friendListRequest = QJsonDocument(MessageProtocol::createMessage(
-                    MessageType::GetFriendList, emptyData)).toJson();
+                    MessageType::FriendList, emptyData)).toJson();
                 m_socket->write(friendListRequest);
                 m_socket->flush();
                 
                 // 请求刷新好友请求列表
                 QByteArray requestListRequest = QJsonDocument(MessageProtocol::createMessage(
-                    MessageType::GetFriendRequests, emptyData)).toJson();
+                    MessageType::FriendRequestList, emptyData)).toJson();
                 m_socket->write(requestListRequest);
                 m_socket->flush();
             }
@@ -608,5 +683,247 @@ void ChatWindow::handleDeleteFriendRequestMessage(const QJsonObject &msgData)
         }
     } else {
         emit statusMessage("删除好友请求失败：" + msgData["reason"].toString("未知错误"));
+    }
+}
+
+// 群聊相关函数实现
+void ChatWindow::createGroup(const QString &groupName, const QStringList &members)
+{
+    if (!m_isLoggedIn) {
+        emit statusMessage("请先登录以创建群聊。");
+        return;
+    }
+    if (groupName.isEmpty()) {
+        emit statusMessage("请输入群聊名称。");
+        return;
+    }
+    if (members.isEmpty()) {
+        emit statusMessage("请选择至少一个群聊成员。");
+        return;
+    }
+    
+    QJsonObject data;
+    data["group_name"] = groupName;
+    
+    // 将成员列表转换为 JSON 数组
+    QJsonArray membersArray;
+    for (const QString &member : members) {
+        membersArray.append(member);
+    }
+    data["members"] = membersArray;
+    
+    if (m_socket->state() == QAbstractSocket::ConnectedState) {
+        QByteArray request = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::CreateGroup, data)).toJson();
+        m_socket->write(request);
+        m_socket->flush();
+        emit statusMessage("正在创建群聊...");
+    } else {
+        emit statusMessage("未连接到服务器，无法创建群聊。");
+    }
+}
+
+void ChatWindow::refreshGroupList()
+{
+    if (!m_isLoggedIn) {
+        emit statusMessage("请先登录以查看群聊列表。");
+        return;
+    }
+    
+    if (m_socket->state() == QAbstractSocket::ConnectedState) {
+        QJsonObject emptyData;
+        QByteArray request = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::GroupList, emptyData)).toJson();
+        m_socket->write(request);
+        m_socket->flush();
+    } else {
+        emit statusMessage("未连接到服务器，无法获取群聊列表。");
+    }
+}
+
+void ChatWindow::selectGroup(const QString &groupId)
+{
+    if (groupId.isEmpty()) {
+        emit statusMessage("群聊ID不能为空。");
+        return;
+    }
+    
+    qDebug() << "选择群聊:" << groupId << "，群名称:" << getGroupName(groupId);
+    
+    // 清除单人聊天的状态
+    m_currentChatFriend.clear();
+    emit currentChatFriendChanged();
+    
+    // 设置群聊状态
+    m_currentChatGroup = groupId;
+    m_isGroupChat = true;
+    qDebug() << "设置isGroupChat为true，当前值:" << m_isGroupChat;
+    emit currentChatGroupChanged();
+    emit isGroupChatChanged();
+    
+    // 清除聊天显示
+    clearChatDisplay();
+    
+    // 获取群成员列表
+    getGroupMembers(groupId);
+    
+    // 加载群聊历史
+    loadGroupChatHistory(groupId);
+}
+
+void ChatWindow::sendGroupMessage(const QString &content)
+{
+    if (!m_isLoggedIn) {
+        emit statusMessage("请先登录以发送群聊消息。");
+        return;
+    }
+    if (m_currentChatGroup.isEmpty()) {
+        emit statusMessage("请选择一个群聊。");
+        return;
+    }
+    QString message = content.trimmed();
+    if (message.isEmpty()) {
+        return;
+    }
+    
+    qDebug() << "发送群聊消息到群" << m_currentChatGroup << "，内容:" << message << "，isGroupChat:" << m_isGroupChat;
+    
+    QJsonObject data;
+    data["group_id"] = m_currentChatGroup.toInt();
+    data["content"] = message;
+    
+    if (m_socket->state() == QAbstractSocket::ConnectedState) {
+        QByteArray request = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::GroupChat, data)).toJson();
+        m_socket->write(request);
+        m_socket->flush();
+        
+        // 立即在本地显示消息
+        QString timestamp = QDateTime::currentDateTime().toString("hh:mm");
+        // 使用groupChatMessageReceived信号替代appendMessage，以保持一致的消息处理
+        qDebug() << "发出groupChatMessageReceived信号，发送者:" << m_currentNickname << "内容:" << message;
+        emit groupChatMessageReceived(m_currentNickname, message, timestamp);
+    } else {
+        emit statusMessage("未连接到服务器，无法发送群聊消息。");
+    }
+}
+
+void ChatWindow::getGroupMembers(const QString &groupId)
+{
+    if (!m_isLoggedIn) {
+        return;
+    }
+    
+    QJsonObject data;
+    data["group_id"] = groupId.toInt();
+    
+    if (m_socket->state() == QAbstractSocket::ConnectedState) {
+        QByteArray request = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::GroupMembers, data)).toJson();
+        m_socket->write(request);
+        m_socket->flush();
+    }
+}
+
+QString ChatWindow::getGroupName(const QString &groupId) const
+{
+    return m_groupNames.value(groupId, "未知群聊");
+}
+
+void ChatWindow::clearChatType()
+{
+    m_currentChatFriend.clear();
+    m_currentChatGroup.clear();
+    m_isGroupChat = false;
+    m_currentGroupMembers.clear();
+    emit currentChatFriendChanged();
+    emit currentChatGroupChanged();
+    emit isGroupChatChanged();
+    emit groupMembersUpdated();
+    clearChatDisplay();
+}
+
+void ChatWindow::updateGroupList(const QStringList &groups)
+{
+    m_groupList = groups;
+    m_groupNames.clear();
+    
+    // 解析格式为 "id:name" 的群组列表，并填充 m_groupNames
+    for (const QString &group : groups) {
+        QStringList parts = group.split(':');
+        if (parts.size() == 2) {
+            m_groupNames[parts.at(0)] = parts.at(1);
+        }
+    }
+    
+    emit groupListUpdated();
+}
+
+void ChatWindow::updateGroupMembers(const QStringList &members)
+{
+    m_currentGroupMembers = members;
+    emit groupMembersUpdated();
+}
+
+void ChatWindow::loadGroupChatHistory(const QString &groupId)
+{
+    if (!m_isLoggedIn) return;
+    
+    QJsonObject data;
+    data["group_id"] = groupId.toInt();
+    
+    if (m_socket->state() == QAbstractSocket::ConnectedState) {
+        QByteArray request = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::GroupChatHistory, data)).toJson();
+        m_socket->write(request);
+        m_socket->flush();
+    } else {
+        emit statusMessage("未连接到服务器，无法加载群聊历史。");
+    }
+}
+
+void ChatWindow::handleCreateGroupMessage(const QJsonObject &msgData)
+{
+    if (msgData["status"].toString() == "success") {
+        QString groupName = msgData["group_name"].toString();
+        emit statusMessage("成功创建群聊：" + groupName);
+        emit groupCreated(groupName);
+        
+        // 刷新群聊列表
+        refreshGroupList();
+    } else if (msgData.contains("group_name") && msgData.contains("creator")) {
+        // 被添加到新群聊的通知
+        QString groupName = msgData["group_name"].toString();
+        QString creator = msgData["creator"].toString();
+        int groupId = msgData["group_id"].toInt();
+        
+        emit statusMessage(QString("你被 %1 添加到群聊：%2").arg(creator, groupName));
+        
+        // 刷新群聊列表
+        refreshGroupList();
+    } else {
+        emit statusMessage("创建群聊失败：" + msgData["reason"].toString("未知错误"));
+    }
+}
+
+void ChatWindow::handleGroupChatMessage(const QJsonObject &msgData)
+{
+    if (msgData.contains("from") && msgData.contains("content")) {
+        QString from = msgData["from"].toString();
+        QString content = msgData["content"].toString();
+        QString timestamp = QDateTime::currentDateTime().toString("hh:mm");
+        int groupId = msgData["group_id"].toInt();
+        
+        qDebug() << "收到群聊消息，来自:" << from << "，内容:" << content << "，群ID:" << groupId
+                 << "，当前群ID:" << m_currentChatGroup << "，是否为群聊模式:" << m_isGroupChat;
+        
+        if (QString::number(groupId) == m_currentChatGroup) {
+            // 发出群聊消息信号，而不是直接添加到消息模型
+            qDebug() << "为当前选中的群聊发出消息信号";
+            emit groupChatMessageReceived(from, content, timestamp);
+        } else {
+            QString groupName = m_groupNames.value(QString::number(groupId), "未知群聊");
+            emit statusMessage(QString("来自群聊 %1 的新消息（%2：%3）").arg(groupName, from, content));
+        }
     }
 }
