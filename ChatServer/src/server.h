@@ -35,13 +35,19 @@ private:
     bool registerUser(const QString &email, const QString &nickname, const QString &password);
     QString loginUser(const QString &nickname, const QString &password, ClientInfo &client);
     bool addFriend(const QString &user, const QString &friendName);
+    bool sendFriendRequest(const QString &from, const QString &to);
+    bool acceptFriendRequest(const QString &from, const QString &to);
+    bool deleteFriend(const QString &user, const QString &friendName);
     QStringList getFriendList(const QString &user);
+    QStringList getFriendRequests(const QString &user);
     bool saveChatMessage(const QString &from, const QString &to, const QString &content);
     QJsonArray getChatHistory(const QString &user1, const QString &user2);
     QString searchUser(const QString &query);
     void updateUserStatus(const QString &nickname, bool isOnline);
     void handleLogout(ClientInfo *clientInfo);
     void notifyFriendsStatusChange(const QString &nickname, bool isOnline);
+    void notifyFriendRequest(const QString &to, const QString &from);
+    bool deleteFriendRequest(const QString &from, const QString &to);
 };
 
 #endif

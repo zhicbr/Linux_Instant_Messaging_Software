@@ -8,6 +8,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include "../Common/config.h"
+#include <QThread>
 
 Server::Server(QObject *parent) : QObject(parent) {
     tcpServer = new QTcpServer(this);
@@ -60,6 +61,7 @@ void Server::handleClientData() {
     MessageType type;
     QJsonObject msgData;
     if (MessageProtocol::parseMessage(data, type, msgData)) {
+        qDebug() << "解析后的消息类型: " << MessageProtocol::messageTypeToString(type) << "(" << static_cast<int>(type) << "), 内容: " << msgData;
         switch (type) {
         case MessageType::Register: {
             QString email = msgData["email"].toString();
@@ -185,6 +187,243 @@ void Server::handleClientData() {
             break;
         case MessageType::Error:
             break; // 忽略客户端发送的错误消息
+        case MessageType::FriendRequest:
+            if (!clientInfo->isLoggedIn) {
+                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Error, {{"reason", "Please login first"}})).toJson());
+                return;
+            }
+            {
+                QString to = msgData["to"].toString();
+                if (sendFriendRequest(clientInfo->nickname, to)) {
+                    clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::FriendRequest, {{"status", "success"}})).toJson());
+                } else {
+                    clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::FriendRequest, {{"status", "failed"}, {"reason", "Request already sent or users are already friends"}})).toJson());
+                }
+            }
+            break;
+        case MessageType::AcceptFriend:
+            qDebug() << "收到接受好友请求消息: " << MessageProtocol::messageTypeToString(type) << " - " << msgData;
+            if (!clientInfo->isLoggedIn) {
+                qDebug() << "未登录用户尝试接受好友请求";
+                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Error, {{"reason", "Please login first"}})).toJson());
+                clientSocket->flush();
+                return;
+            }
+            {
+                QString from = msgData["from"].toString();
+                qDebug() << "处理接受好友请求：" << from << "到" << clientInfo->nickname;
+                if (acceptFriendRequest(from, clientInfo->nickname)) {
+                    qDebug() << "接受好友请求成功，发送响应";
+                    
+                    // 发送成功响应给接受者
+                    QJsonObject accepterResponse;
+                    accepterResponse["status"] = "success";
+                    QByteArray accepterMsg = QJsonDocument(MessageProtocol::createMessage(
+                        MessageType::AcceptFriend, accepterResponse)).toJson();
+                    clientSocket->write(accepterMsg);
+                    clientSocket->flush();
+                    qDebug() << "已发送响应给接受者：" << accepterMsg;
+                    
+                    // 等待一小段时间确保消息被处理
+                    QThread::msleep(50);
+                    
+                    // 刷新接受者的好友列表
+                    QStringList accepterFriends = getFriendList(clientInfo->nickname);
+                    QJsonArray accepterFriendArray;
+                    for (const QString &f : accepterFriends) {
+                        accepterFriendArray.append(f);
+                    }
+                    QJsonObject friendsResponse;
+                    friendsResponse["status"] = "success";
+                    friendsResponse["friends"] = accepterFriendArray;
+                    QByteArray friendsMsg = QJsonDocument(MessageProtocol::createMessage(
+                        MessageType::GetFriendList, friendsResponse)).toJson();
+                    clientSocket->write(friendsMsg);
+                    clientSocket->flush();
+                    qDebug() << "已发送好友列表给接受者：" << friendsResponse;
+                    
+                    // 等待一小段时间确保消息被处理
+                    QThread::msleep(50);
+                    
+                    // 刷新接受者的好友请求列表
+                    QStringList requests = getFriendRequests(clientInfo->nickname);
+                    QJsonArray requestArray;
+                    for (const QString &r : requests) {
+                        requestArray.append(r);
+                    }
+                    QJsonObject refreshRequestsResponse;
+                    refreshRequestsResponse["status"] = "success";
+                    refreshRequestsResponse["requests"] = requestArray;
+                    QByteArray refreshRequestsMsg = QJsonDocument(MessageProtocol::createMessage(
+                        MessageType::GetFriendRequests, refreshRequestsResponse)).toJson();
+                    clientSocket->write(refreshRequestsMsg);
+                    clientSocket->flush();
+                    qDebug() << "已发送好友请求列表给接受者：" << refreshRequestsResponse;
+                    
+                    // 通知发送请求的用户
+                    bool notified = false;
+                    for (const ClientInfo &client : clients) {
+                        if (client.isLoggedIn && client.nickname == from) {
+                            qDebug() << "找到请求发送者" << from << "，发送通知";
+                            
+                            // 发送接受通知
+                            QJsonObject senderResponse;
+                            senderResponse["status"] = "success";
+                            senderResponse["friend"] = clientInfo->nickname;
+                            QByteArray senderMsg = QJsonDocument(MessageProtocol::createMessage(
+                                MessageType::AcceptFriend, senderResponse)).toJson();
+                            client.socket->write(senderMsg);
+                            client.socket->flush();
+                            qDebug() << "已发送通知给请求发送者：" << senderMsg;
+                            
+                            // 等待一小段时间确保消息被处理
+                            QThread::msleep(100);
+                            
+                            // 刷新发送者的好友列表
+                            QStringList senderFriends = getFriendList(from);
+                            QJsonArray senderFriendArray;
+                            for (const QString &f : senderFriends) {
+                                senderFriendArray.append(f);
+                            }
+                            QJsonObject senderFriendsResponse;
+                            senderFriendsResponse["status"] = "success";
+                            senderFriendsResponse["friends"] = senderFriendArray;
+                            QByteArray senderFriendsMsg = QJsonDocument(MessageProtocol::createMessage(
+                                MessageType::GetFriendList, senderFriendsResponse)).toJson();
+                            client.socket->write(senderFriendsMsg);
+                            client.socket->flush();
+                            qDebug() << "已发送好友列表给请求发送者：" << senderFriendsResponse;
+                            
+                            notified = true;
+                            break;
+                        }
+                    }
+                    if (!notified) {
+                        qDebug() << "请求发送者" << from << "不在线，无法通知";
+                    }
+                } else {
+                    qDebug() << "接受好友请求失败：请求不存在或已处理";
+                    QJsonObject errorResponse;
+                    errorResponse["status"] = "failed";
+                    errorResponse["reason"] = "Request not found or already processed";
+                    QByteArray errorMsg = QJsonDocument(MessageProtocol::createMessage(
+                        MessageType::AcceptFriend, errorResponse)).toJson();
+                    clientSocket->write(errorMsg);
+                    clientSocket->flush();
+                    qDebug() << "已发送错误响应：" << errorMsg;
+                }
+            }
+            break;
+        case MessageType::DeleteFriend:
+            if (!clientInfo->isLoggedIn) {
+                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Error, {{"reason", "Please login first"}})).toJson());
+                return;
+            }
+            {
+                QString friendName = msgData["friend"].toString();
+                if (deleteFriend(clientInfo->nickname, friendName)) {
+                    clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::DeleteFriend, {{"status", "success"}})).toJson());
+                    // 通知被删除的好友
+                    for (const ClientInfo &client : clients) {
+                        if (client.isLoggedIn && client.nickname == friendName) {
+                            client.socket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::DeleteFriend, {{"status", "success"}, {"friend", clientInfo->nickname}})).toJson());
+                            break;
+                        }
+                    }
+                } else {
+                    clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::DeleteFriend, {{"status", "failed"}, {"reason", "Friend not found"}})).toJson());
+                }
+            }
+            break;
+        case MessageType::GetFriendRequests:
+            if (!clientInfo->isLoggedIn) {
+                qDebug() << "未登录用户尝试获取好友请求列表";
+                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Error, {{"reason", "Please login first"}})).toJson());
+                return;
+            }
+            {
+                qDebug() << "处理获取好友请求列表请求，用户：" << clientInfo->nickname;
+                QStringList requests = getFriendRequests(clientInfo->nickname);
+                QJsonArray requestArray;
+                for (const QString &r : requests) {
+                    requestArray.append(r);
+                }
+                QJsonObject response;
+                response["status"] = "success";
+                response["requests"] = requestArray;
+                QByteArray responseMsg = QJsonDocument(MessageProtocol::createMessage(MessageType::GetFriendRequests, response)).toJson();
+                qDebug() << "发送好友请求列表响应：" << response;
+                clientSocket->write(responseMsg);
+                clientSocket->flush();
+            }
+            break;
+        case MessageType::DeleteFriendRequest: {
+            qDebug() << "收到删除好友请求消息: " << MessageProtocol::messageTypeToString(type) << " - " << msgData;
+            if (!clientInfo->isLoggedIn) {
+                qDebug() << "未登录用户尝试删除好友请求";
+                QJsonObject errorResponse;
+                errorResponse["status"] = "failed";
+                errorResponse["reason"] = "请先登录";
+                QByteArray errorMsg = QJsonDocument(MessageProtocol::createMessage(
+                    MessageType::DeleteFriendRequest, errorResponse)).toJson();
+                clientInfo->socket->write(errorMsg);
+                clientInfo->socket->flush();
+                qDebug() << "已发送错误响应：" << errorMsg;
+                break;
+            }
+            
+            QString from = msgData["from"].toString();
+            if (from.isEmpty()) {
+                qDebug() << "无效的好友请求源用户";
+                QJsonObject errorResponse;
+                errorResponse["status"] = "failed";
+                errorResponse["reason"] = "无效的好友请求";
+                QByteArray errorMsg = QJsonDocument(MessageProtocol::createMessage(
+                    MessageType::DeleteFriendRequest, errorResponse)).toJson();
+                clientInfo->socket->write(errorMsg);
+                clientInfo->socket->flush();
+                qDebug() << "已发送错误响应：" << errorMsg;
+                break;
+            }
+            
+            qDebug() << "处理删除好友请求，从" << from << "到" << clientInfo->nickname;
+            if (deleteFriendRequest(from, clientInfo->nickname)) {
+                // 发送成功响应
+                QJsonObject response;
+                response["status"] = "success";
+                QByteArray responseMsg = QJsonDocument(MessageProtocol::createMessage(
+                    MessageType::DeleteFriendRequest, response)).toJson();
+                clientInfo->socket->write(responseMsg);
+                clientInfo->socket->flush();
+                qDebug() << "已发送删除好友请求成功响应：" << responseMsg;
+                
+                // 刷新好友请求列表
+                QStringList requests = getFriendRequests(clientInfo->nickname);
+                QJsonArray requestArray;
+                for (const QString &r : requests) {
+                    requestArray.append(r);
+                }
+                QJsonObject refreshResponse;
+                refreshResponse["status"] = "success";
+                refreshResponse["requests"] = requestArray;
+                QByteArray refreshMsg = QJsonDocument(MessageProtocol::createMessage(
+                    MessageType::GetFriendRequests, refreshResponse)).toJson();
+                clientInfo->socket->write(refreshMsg);
+                clientInfo->socket->flush();
+                qDebug() << "已发送刷新好友请求列表响应：" << refreshResponse;
+            } else {
+                // 发送失败响应
+                QJsonObject errorResponse;
+                errorResponse["status"] = "failed";
+                errorResponse["reason"] = "删除好友请求失败";
+                QByteArray errorMsg = QJsonDocument(MessageProtocol::createMessage(
+                    MessageType::DeleteFriendRequest, errorResponse)).toJson();
+                clientInfo->socket->write(errorMsg);
+                clientInfo->socket->flush();
+                qDebug() << "已发送错误响应：" << errorMsg;
+            }
+            break;
+        }
         }
     } else {
         qDebug() << "Failed to parse message:" << data;
@@ -259,6 +498,9 @@ bool Server::initDatabase() {
     // 先删除旧表以确保字段正确
     QSqlQuery dropQuery(db);
     dropQuery.exec("DROP TABLE IF EXISTS users");
+    dropQuery.exec("DROP TABLE IF EXISTS friends");
+    dropQuery.exec("DROP TABLE IF EXISTS messages");
+    dropQuery.exec("DROP TABLE IF EXISTS friend_requests");
 
     QSqlQuery query;
     QString createUsersTable = R"(
@@ -301,6 +543,22 @@ bool Server::initDatabase() {
     )";
     if (!query.exec(createMessagesTable)) {
         qDebug() << "Error: Failed to create messages table:" << query.lastError().text();
+        return false;
+    }
+
+    QString createFriendRequestsTable = R"(
+        CREATE TABLE IF NOT EXISTS friend_requests (
+            from_nickname TEXT,
+            to_nickname TEXT,
+            status TEXT DEFAULT 'pending',
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (from_nickname, to_nickname),
+            FOREIGN KEY (from_nickname) REFERENCES users(nickname),
+            FOREIGN KEY (to_nickname) REFERENCES users(nickname)
+        )
+    )";
+    if (!query.exec(createFriendRequestsTable)) {
+        qDebug() << "Error: Failed to create friend_requests table:" << query.lastError().text();
         return false;
     }
     return true;
@@ -396,11 +654,166 @@ QJsonArray Server::getChatHistory(const QString &user1, const QString &user2) {
 }
 
 QString Server::searchUser(const QString &query) {
-    QSqlQuery sqlQuery;
-    sqlQuery.prepare("SELECT nickname FROM users WHERE nickname = :query OR email = :query");
-    sqlQuery.bindValue(":query", query);
+    QSqlQuery sqlQuery(db);
+    sqlQuery.prepare("SELECT nickname FROM users WHERE nickname LIKE ? OR email LIKE ?");
+    sqlQuery.addBindValue("%" + query + "%");
+    sqlQuery.addBindValue("%" + query + "%");
     if (sqlQuery.exec() && sqlQuery.next()) {
         return sqlQuery.value("nickname").toString();
     }
     return QString();
+}
+
+bool Server::sendFriendRequest(const QString &from, const QString &to) {
+    QSqlQuery query(db);
+    qDebug() << "处理来自" << from << "向" << to << "发送的好友请求";
+    
+    // 检查是否已经是好友
+    query.prepare("SELECT 1 FROM friends WHERE (user_nickname = ? AND friend_nickname = ?) OR (user_nickname = ? AND friend_nickname = ?)");
+    query.addBindValue(from);
+    query.addBindValue(to);
+    query.addBindValue(to);
+    query.addBindValue(from);
+    if (query.exec() && query.next()) {
+        qDebug() << "已经是好友关系，无需发送请求";
+        return false; // 已经是好友
+    }
+    
+    // 检查是否已经有待处理的请求
+    query.prepare("SELECT 1 FROM friend_requests WHERE from_nickname = ? AND to_nickname = ? AND status = 'pending'");
+    query.addBindValue(from);
+    query.addBindValue(to);
+    if (query.exec() && query.next()) {
+        qDebug() << "已经存在待处理的请求";
+        return false; // 已经有待处理的请求
+    }
+    
+    // 添加好友请求
+    query.prepare("INSERT INTO friend_requests (from_nickname, to_nickname, status) VALUES (?, ?, 'pending')");
+    query.addBindValue(from);
+    query.addBindValue(to);
+    if (query.exec()) {
+        qDebug() << "好友请求已添加到数据库";
+        notifyFriendRequest(to, from);
+        return true;
+    } else {
+        qDebug() << "添加好友请求失败：" << query.lastError().text();
+        return false;
+    }
+}
+
+bool Server::acceptFriendRequest(const QString &from, const QString &to) {
+    QSqlQuery query(db);
+    qDebug() << "处理接受好友请求函数：" << from << "->" << to;
+    
+    // 检查请求是否存在
+    query.prepare("SELECT 1 FROM friend_requests WHERE from_nickname = ? AND to_nickname = ? AND status = 'pending'");
+    query.addBindValue(from);
+    query.addBindValue(to);
+    if (!query.exec()) {
+        qDebug() << "查询好友请求失败：" << query.lastError().text();
+        return false;
+    }
+    if (!query.next()) {
+        qDebug() << "未找到待处理的好友请求";
+        return false;
+    }
+    
+    // 开始事务
+    qDebug() << "开始数据库事务";
+    if (!db.transaction()) {
+        qDebug() << "开始事务失败：" << db.lastError().text();
+        return false;
+    }
+    
+    // 删除好友请求（不再是更新状态，而是直接删除）
+    query.prepare("DELETE FROM friend_requests WHERE from_nickname = ? AND to_nickname = ?");
+    query.addBindValue(from);
+    query.addBindValue(to);
+    if (!query.exec()) {
+        qDebug() << "删除好友请求失败：" << query.lastError().text();
+        db.rollback();
+        return false;
+    }
+    
+    // 添加好友关系（双向）
+    query.prepare("INSERT INTO friends (user_nickname, friend_nickname) VALUES (?, ?), (?, ?)");
+    query.addBindValue(from);
+    query.addBindValue(to);
+    query.addBindValue(to);
+    query.addBindValue(from);
+    if (!query.exec()) {
+        qDebug() << "添加好友关系失败：" << query.lastError().text();
+        db.rollback();
+        return false;
+    }
+    
+    qDebug() << "提交事务";
+    if (!db.commit()) {
+        qDebug() << "提交事务失败：" << db.lastError().text();
+        db.rollback();
+        return false;
+    }
+    
+    qDebug() << "成功处理好友请求：" << from << "和" << to << "已成为好友";
+    return true;
+}
+
+bool Server::deleteFriend(const QString &user, const QString &friendName) {
+    QSqlQuery query(db);
+    query.prepare("DELETE FROM friends WHERE (user_nickname = ? AND friend_nickname = ?) OR (user_nickname = ? AND friend_nickname = ?)");
+    query.addBindValue(user);
+    query.addBindValue(friendName);
+    query.addBindValue(friendName);
+    query.addBindValue(user);
+    return query.exec();
+}
+
+QStringList Server::getFriendRequests(const QString &user) {
+    QStringList requests;
+    QSqlQuery query(db);
+    qDebug() << "获取用户" << user << "的好友请求列表";
+    query.prepare("SELECT from_nickname FROM friend_requests WHERE to_nickname = ? AND status = 'pending'");
+    query.addBindValue(user);
+    if (query.exec()) {
+        while (query.next()) {
+            QString from = query.value("from_nickname").toString();
+            requests << from;
+            qDebug() << "找到来自" << from << "的好友请求";
+        }
+    } else {
+        qDebug() << "查询好友请求失败：" << query.lastError().text();
+    }
+    qDebug() << "总共找到" << requests.size() << "个好友请求";
+    return requests;
+}
+
+void Server::notifyFriendRequest(const QString &to, const QString &from) {
+    QJsonObject notification;
+    notification["from"] = from;
+    QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::FriendRequest, notification)).toJson();
+    
+    // 遍历所有客户端，找到目标用户并发送通知
+    for (auto it = clients.begin(); it != clients.end(); ++it) {
+        if (it->isLoggedIn && it->nickname == to) {
+            qDebug() << "Sending friend request notification from" << from << "to" << to;
+            it->socket->write(message);
+            it->socket->flush(); // 确保消息立即发送
+            break;
+        }
+    }
+}
+
+bool Server::deleteFriendRequest(const QString &from, const QString &to)
+{
+    QSqlQuery query(db);
+    query.prepare("DELETE FROM friend_requests WHERE from_nickname = ? AND to_nickname = ?");
+    query.addBindValue(from);
+    query.addBindValue(to);
+    if (!query.exec()) {
+        qDebug() << "删除好友请求失败：" << query.lastError().text();
+        return false;
+    }
+    qDebug() << "成功删除好友请求，从" << from << "到" << to;
+    return true;
 }

@@ -7,5 +7,6 @@
         <file>qml/MessageBubble.qml</file>
         <file>qml/FriendListItem.qml</file>
         <file>qml/SettingsPage.qml</file>
+        <file>qml/FriendList.qml</file>
     </qresource>
 </RCC>

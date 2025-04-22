@@ -1,3 +1,13 @@
+
+
+## 当前
+
+使用Code3里的project1-1
+
+
+
+
+
 ## 构建编译运行
 
 
@@ -209,4 +219,7 @@ resources.qrc 添加        <file>qml/SettingsPage.qml</file>
     </qresource>
 </RCC>
 ```
+
+## 注意
+不要用c++的关键字作为参数名
 

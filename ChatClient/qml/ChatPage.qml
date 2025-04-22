@@ -97,7 +97,7 @@ Rectangle {
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
-                        onClicked: chatWindow.addFriend(searchField.text)
+                        onClicked: chatWindow.sendFriendRequest(searchField.text)
                     }
                 }
 
@@ -118,26 +118,27 @@ Rectangle {
                     onClicked: chatWindow.searchUser(searchField.text)
                 }
 
-                Text {
-                    text: "好友"
-                    font.pixelSize: 11
-                    font.bold: true
-                    color: "#6C757D"
-                    textFormat: Text.PlainText
-                    Layout.topMargin: 5
-                    Layout.leftMargin: 5
-                }
-
-                ListView {
-                    id: friendList
+                FriendList {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    model: chatWindow.getFriendList()
-                    delegate: FriendListItem {
-                        friendName: modelData
-                        onClicked: chatWindow.selectFriend(friendName)
+                    friendModel: chatWindow.friendList
+                    requestModel: chatWindow.friendRequests
+                    
+                    onFriendSelected: function(friendName) {
+                        chatWindow.selectFriend(friendName)
                     }
-                    clip: true
+                    
+                    onAcceptRequest: function(friendName) {
+                        chatWindow.acceptFriendRequest(friendName)
+                    }
+                    
+                    onDeleteRequest: function(friendName) {
+                        chatWindow.deleteFriendRequest(friendName)
+                    }
+                    
+                    onDeleteFriend: function(friendName) {
+                        chatWindow.deleteFriend(friendName)
+                    }
                 }
             }
         }
@@ -179,40 +180,42 @@ Rectangle {
                     spacing: 10
 
                     TextField {
-                        id: messageField
+                        id: messageInput
                         Layout.fillWidth: true
-                        placeholderText: chatWindow.currentChatFriend ? "给 " + chatWindow.currentChatFriend + " 发送消息..." : "输入消息..."
+                        placeholderText: "输入消息..."
                         font.pixelSize: 14
                         background: Rectangle {
-                            border.color: messageField.activeFocus ? "#80BDFF" : "#CED4DA"
+                            border.color: messageInput.activeFocus ? "#80BDFF" : "#CED4DA"
                             border.width: 1
-                            radius: 20
-                            color: "#FFFFFF"
+                            radius: 4
                         }
                         Keys.onReturnPressed: {
-                            chatWindow.sendMessage(text);
-                            text = "";
+                            if (text.trim() !== "") {
+                                chatWindow.sendMessage(text);
+                                text = "";
+                            }
                         }
                     }
 
                     Button {
                         text: "发送"
-                        Layout.preferredWidth: 40
-                        Layout.preferredHeight: 40
-                        enabled: chatWindow.currentChatFriend !== ""
+                        Layout.preferredWidth: 80
+                        font.pixelSize: 14
                         background: Rectangle {
-                            color: parent.enabled ? (parent.pressed ? "#0056b3" : "#007BFF") : "#B0D7FF"
-                            radius: 20
+                            color: parent.pressed ? "#0056b3" : "#007BFF"
+                            radius: 4
                         }
                         contentItem: Text {
                             text: parent.text
-                            color: parent.enabled ? "white" : "#E0F0FF"
+                            color: "white"
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
                         onClicked: {
-                            chatWindow.sendMessage(messageField.text);
-                            messageField.text = "";
+                            if (messageInput.text.trim() !== "") {
+                                chatWindow.sendMessage(messageInput.text);
+                                messageInput.text = "";
+                            }
                         }
                     }
                 }
@@ -223,13 +226,14 @@ Rectangle {
     Connections {
         target: chatWindow
         function onMessageReceived(sender, content, timestamp) {
-            messageModel.append({ sender: sender, content: content, timestamp: timestamp });
+            messageModel.append({
+                "sender": sender,
+                "content": content,
+                "timestamp": timestamp
+            });
         }
         function onChatDisplayCleared() {
             messageModel.clear();
-        }
-        function onFriendListUpdated(friends) {
-            friendList.model = friends;
         }
     }
 }
