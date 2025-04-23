@@ -9,5 +9,7 @@
         <file>qml/SettingsPage.qml</file>
         <file>qml/FriendList.qml</file>
         <file>qml/GroupChatPage.qml</file>
+        <file>qml/ProfilePage.qml</file>
+        <file>images/default_avatar.png</file>
     </qresource>
 </RCC>

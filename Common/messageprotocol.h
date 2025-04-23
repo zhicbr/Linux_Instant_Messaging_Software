@@ -30,7 +30,13 @@ enum MessageType {
     GroupList = 17,     // 获取群聊列表
     GroupMembers = 18,  // 获取群成员列表
     GroupChat = 19,     // 群聊消息
-    GroupChatHistory = 20 // 群聊历史记录
+    GroupChatHistory = 20, // 群聊历史记录
+    
+    // 用户个人信息相关消息类型
+    GetUserProfile = 21,    // 获取用户个人资料
+    UpdateUserProfile = 22, // 更新用户个人资料
+    UploadAvatar = 23,      // 上传头像
+    GetAvatar = 24          // 获取头像
 };
 
 class MessageProtocol {
@@ -60,6 +66,10 @@ public:
             case MessageType::GroupMembers: return "GroupMembers";
             case MessageType::GroupChat: return "GroupChat";
             case MessageType::GroupChatHistory: return "GroupChatHistory";
+            case MessageType::GetUserProfile: return "GetUserProfile";
+            case MessageType::UpdateUserProfile: return "UpdateUserProfile";
+            case MessageType::UploadAvatar: return "UploadAvatar";
+            case MessageType::GetAvatar: return "GetAvatar";
             default: return "Unknown";
         }
     }

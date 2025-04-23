@@ -351,6 +351,53 @@ resources.qrc 添加        <file>qml/SettingsPage.qml</file>
 3. 添加适当的调试日志对于排查UI显示问题非常重要，特别是在信号-槽机制的调试中。
 4. 在QML和C++交互中，需要确保属性变化正确触发相应的信号以更新UI状态。
 
+### 3. 头像退出后无法显示问题
+
+**问题描述**：
+用户上传头像后，在当前会话中能正常显示，但退出重新登录后，头像无法显示，需要重新上传。
+
+**原因分析**：
+1. **客户端缓存问题**：头像上传函数(`uploadAvatar`)中目录创建逻辑不完整，导致本地头像无法正确保存。
+2. **文件权限问题**：保存的头像文件没有设置正确的读写权限，导致应用重启后无法访问。
+3. **缓存管理不完善**：当文件已存在时没有先删除，可能导致文件复制操作失败。
+4. **信号连接缺失**：上传头像后没有立即更新UI的信号发送，导致界面刷新不及时。
+
+**解决方案**：
+1. 完善客户端头像缓存机制：
+   ```cpp
+   // 确保目录存在并有正确的权限
+   QString permanentDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/avatars/";
+   QDir dir(permanentDir);
+   if (!dir.exists()) {
+       bool created = dir.mkpath(".");
+       qDebug() << "创建头像目录结果:" << created << ", 路径:" << dir.absolutePath();
+   }
+   
+   // 处理文件已存在的情况
+   QFile existingFile(filePath);
+   if (existingFile.exists()) {
+       existingFile.remove();
+   }
+   
+   // 设置正确的文件权限
+   QFile::setPermissions(filePath, QFile::ReadOwner | QFile::WriteOwner);
+   ```
+
+2. 改进服务器响应处理：
+   - 在处理`GetAvatar`响应时添加详细日志
+   - 增强文件操作的错误处理
+   - 确保头像数据正确写入文件系统
+
+3. 优化UI更新机制：
+   - 在上传头像成功后立即发送`avatarReceived`信号
+   - 确保QML组件能正确响应头像路径变化
+
+**教训**：
+1. 文件操作需要考虑权限和存在性问题，特别是跨平台应用。
+2. 缓存机制设计需要考虑应用程序重启后的数据恢复。
+3. 调试日志对于排查文件系统相关问题非常重要。
+4. 在实现涉及持久化存储的功能时，需要全面测试重启场景下的行为。
+
 
 
 

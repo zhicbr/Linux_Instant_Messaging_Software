@@ -20,6 +20,7 @@ class ChatWindow : public QObject {
     Q_PROPERTY(QStringList groupMembers READ getGroupMembers NOTIFY groupMembersUpdated)
     Q_PROPERTY(QString currentChatGroup READ currentChatGroup NOTIFY currentChatGroupChanged)
     Q_PROPERTY(bool isGroupChat READ isGroupChat NOTIFY isGroupChatChanged)
+    Q_PROPERTY(QVariantMap userProfile READ getUserProfile NOTIFY userProfileChanged)
 
 public:
     explicit ChatWindow(QObject *parent = nullptr);
@@ -36,6 +37,7 @@ public:
     QStringList getGroupMembers() const { return m_currentGroupMembers; }
     QString currentChatGroup() const { return m_currentChatGroup; }
     bool isGroupChat() const { return m_isGroupChat; }
+    QVariantMap getUserProfile() const { return m_userProfile; }
 
     // QML 可调用的方法
     Q_INVOKABLE void login(const QString &nickname, const QString &password);
@@ -68,6 +70,15 @@ public:
     Q_INVOKABLE void updateGroupList(const QStringList &groups);
     Q_INVOKABLE void updateGroupMembers(const QStringList &members);
 
+    // 添加用户资料相关方法
+    Q_INVOKABLE void requestUserProfile();
+    Q_INVOKABLE void updateUserProfile(const QString &nickname, const QString &signature, 
+                                     const QString &gender, const QString &birthday,
+                                     const QString &location, const QString &phone);
+    Q_INVOKABLE void uploadAvatar(const QString &filePath);
+    Q_INVOKABLE void requestAvatar(const QString &nickname);
+    Q_INVOKABLE QString getCachedAvatarPath(const QString &nickname) const;
+
 signals:
     void isLoggedInChanged();
     void currentNicknameChanged();
@@ -87,6 +98,10 @@ signals:
     void isGroupChatChanged();
     void groupCreated(const QString &groupName);
     void groupChatMessageReceived(const QString &sender, const QString &content, const QString &timestamp);
+    void userProfileChanged();
+    void avatarReceived(const QString &nickname, const QString &localPath);
+    void profileUpdateSuccess();
+    void avatarUploadSuccess();
 
 private slots:
     void handleServerData();
@@ -115,6 +130,11 @@ private:
     QStringList m_currentGroupMembers;
     QString m_currentChatGroup;
     bool m_isGroupChat = false;
+
+    QVariantMap m_userProfile;
+    
+    // 头像缓存
+    QMap<QString, QString> m_avatarCache; // nickname -> local file path
 
     void loadChatHistory(const QString &friendName);
     void refreshFriendRequests();

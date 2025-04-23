@@ -28,6 +28,25 @@ Rectangle {
                     spacing: 10
 
                     Button {
+                        text: "个人资料"
+                        Layout.fillWidth: true
+                        font.pixelSize: 13
+                        background: Rectangle {
+                            color: parent.pressed ? theme.primaryButtonPressedColor : theme.primaryButtonColor
+                            radius: 6
+                            border.width: 0
+                        }
+                        contentItem: Text {
+                            text: parent.text
+                            color: "white"
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            font: parent.font
+                        }
+                        onClicked: stackView.push(profilePage)
+                    }
+
+                    Button {
                         text: "设置"
                         Layout.fillWidth: true
                         font.pixelSize: 13

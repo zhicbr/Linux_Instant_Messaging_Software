@@ -4,6 +4,11 @@
 #include <QDateTime>
 #include "../Common/config.h"
 #include <QTimer>
+#include <QStandardPaths>
+#include <QDir>
+#include <QFile>
+#include <QSettings>
+#include <QFileInfo>
 
 ChatWindow::ChatWindow(QObject *parent)
     : QObject(parent), m_socket(new QTcpSocket(this)), m_isLoggedIn(false)
@@ -15,6 +20,19 @@ ChatWindow::ChatWindow(QObject *parent)
     connect(m_socket, &QTcpSocket::disconnected, this, &ChatWindow::onDisconnected);
     connect(m_socket, QOverload<QAbstractSocket::SocketError>::of(&QTcpSocket::errorOccurred),
             this, &ChatWindow::onSocketError);
+    
+    // 从设置中恢复头像缓存信息
+    QSettings settings;
+    settings.beginGroup("AvatarCache");
+    QStringList keys = settings.childKeys();
+    for (const QString &nickname : keys) {
+        QString path = settings.value(nickname).toString();
+        // 确认文件存在
+        if (QFile::exists(path)) {
+            m_avatarCache[nickname] = path;
+        }
+    }
+    settings.endGroup();
 }
 
 ChatWindow::~ChatWindow()
@@ -330,31 +348,25 @@ void ChatWindow::logout() {
 
 void ChatWindow::handleServerData()
 {
+    if (m_socket->bytesAvailable() <= 0) return;
+    
     QByteArray data = m_socket->readAll();
-    qDebug() << "收到消息：" << data;
+    QJsonObject messageObj = QJsonDocument::fromJson(data).object();
+    int type = messageObj["type"].toInt();
+    QJsonObject msgData = messageObj["data"].toObject();
+    
+    MessageType messageType = static_cast<MessageType>(type);
+    qDebug() << "收到消息类型:" << MessageProtocol::messageTypeToString(messageType);
+    
+    switch (messageType) {
+        case MessageType::Register:
+            if (msgData.value("status").toString() == "success") {
+                emit statusMessage("注册成功！请使用新账户登录。");
+            } else {
+                emit statusMessage("注册失败：" + msgData.value("reason").toString("未知错误"));
+            }
+            break;
 
-    MessageType type;
-    QJsonObject msgData;
-    if (MessageProtocol::parseMessage(data, type, msgData)) {
-        qDebug() << "解析后的消息类型：" << MessageProtocol::messageTypeToString(type) << "(" << static_cast<int>(type) << "), 内容：" << msgData;
-        
-        // 处理 AcceptFriend 和 DeleteFriendRequest 消息的特殊逻辑
-        if (type == MessageType::AcceptFriend) {
-            handleAcceptFriendMessage(msgData);
-            return;
-        } else if (type == MessageType::DeleteFriendRequest) {
-            handleDeleteFriendRequestMessage(msgData);
-            return;
-        } else if (type == MessageType::CreateGroup) {
-            handleCreateGroupMessage(msgData);
-            return;
-        } else if (type == MessageType::GroupChat && msgData.contains("from")) {
-            handleGroupChatMessage(msgData);
-            return;
-        }
-        
-        // 处理其他消息类型
-        switch (type) {
         case MessageType::Login:
             if (msgData.value("status").toString() == "success") {
                 m_isLoggedIn = true;
@@ -381,14 +393,6 @@ void ChatWindow::handleServerData()
                 });
             } else {
                 emit statusMessage("登录失败：" + msgData.value("reason").toString("未知错误"));
-            }
-            break;
-
-        case MessageType::Register:
-            if (msgData.value("status").toString() == "success") {
-                emit statusMessage("注册成功！请使用新账户登录。");
-            } else {
-                emit statusMessage("注册失败：" + msgData.value("reason").toString("未知错误"));
             }
             break;
 
@@ -524,7 +528,6 @@ void ChatWindow::handleServerData()
             break;
         }
 
-        // 群聊相关消息处理
         case MessageType::GroupList:
             if (msgData["status"].toString() == "success") {
                 QStringList groups;
@@ -563,34 +566,143 @@ void ChatWindow::handleServerData()
             
         case MessageType::GroupChatHistory:
             if (msgData["status"].toString() == "success") {
-                clearChatDisplay();
+                qDebug() << "收到群聊历史记录";
                 QJsonArray messages = msgData["messages"].toArray();
+                
                 if (messages.isEmpty()) {
-                    // 使用群聊消息信号显示空消息提示
-                    emit groupChatMessageReceived("系统", "尚无群聊消息记录。", "");
-                    qDebug() << "群聊历史为空，发送空消息提示";
+                    qDebug() << "群聊历史记录为空，显示提示信息";
+                    emit groupChatMessageReceived("系统", "暂无群聊记录", QDateTime::currentDateTime().toString("hh:mm"));
                 } else {
-                    qDebug() << "收到群聊历史记录，消息数量:" << messages.size();
-                    for (const QJsonValue &msgValue : messages) {
-                        QJsonObject msgObj = msgValue.toObject();
-                        QString sender = msgObj["from"].toString();
-                        QString content = msgObj["content"].toString();
-                        QString timestamp = msgObj.contains("timestamp") ? 
-                            msgObj["timestamp"].toString() : QDateTime::currentDateTime().toString("hh:mm");
-                        // 使用群聊消息信号而不是普通消息信号
+                    for (const QJsonValue &messageVal : messages) {
+                        QJsonObject message = messageVal.toObject();
+                        QString sender = message["from"].toString();
+                        QString content = message["content"].toString();
+                        QString timestamp = QDateTime::fromString(message["timestamp"].toString(), Qt::ISODate).toString("hh:mm");
+                        
                         emit groupChatMessageReceived(sender, content, timestamp);
-                        qDebug() << "发送群聊历史消息，发送者:" << sender << "，内容:" << content;
                     }
                 }
-            } else {
-                emit statusMessage("无法获取群聊历史记录");
             }
             break;
 
-        default:
-            qWarning() << "未处理的消息类型：" << static_cast<int>(type);
+        case MessageType::GetUserProfile:
+            if (msgData["status"].toString() == "success") {
+                // 更新用户资料
+                m_userProfile.clear();
+                
+                // 复制关键字段到用户资料
+                QStringList fields = {"nickname", "email", "signature", "gender", "birthday", 
+                                     "location", "phone", "register_time", "last_login_time", 
+                                     "friend_count", "group_count"};
+                for (const QString &field : fields) {
+                    if (msgData.contains(field)) {
+                        m_userProfile[field] = msgData[field].toVariant();
+                    }
+                }
+                
+                emit userProfileChanged();
+                
+                // 如果有头像信息，请求头像
+                if (msgData.contains("avatar") && !msgData["avatar"].toString().isEmpty()) {
+                    requestAvatar(m_currentNickname);
+                }
+            } else {
+                emit statusMessage("获取用户资料失败：" + msgData["reason"].toString("未知错误"));
+            }
+            break;
+            
+        case MessageType::UpdateUserProfile:
+            if (msgData["status"].toString() == "success") {
+                emit statusMessage("个人资料已更新");
+                emit profileUpdateSuccess();
+                // 重新请求用户资料以获取最新数据
+                requestUserProfile();
+            } else {
+                emit statusMessage("更新个人资料失败：" + msgData["reason"].toString("未知错误"));
+            }
+            break;
+            
+        case MessageType::UploadAvatar:
+            if (msgData["status"].toString() == "success") {
+                emit statusMessage("头像已更新");
+                emit avatarUploadSuccess();
+                // 请求最新的头像
+                requestAvatar(m_currentNickname);
+            } else {
+                emit statusMessage("上传头像失败：" + msgData["reason"].toString("未知错误"));
+            }
+            break;
+            
+        case MessageType::GetAvatar: {
+            QString nickname = msgData["nickname"].toString();
+            
+            // 检查是否有头像数据
+            if (msgData.contains("avatar_data")) {
+                QByteArray data = QByteArray::fromBase64(msgData["avatar_data"].toString().toLatin1());
+                qDebug() << "收到头像数据，用户:" << nickname << "，大小:" << data.size() << "字节";
+                
+                if (data.size() > 0) {
+                    // 创建应用数据目录的avatars文件夹
+                    QString appDataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+                    QDir dir(appDataPath + "/avatars/");
+                    if (!dir.exists()) {
+                        bool created = dir.mkpath(".");
+                        qDebug() << "创建头像目录结果:" << created << ", 路径:" << dir.absolutePath();
+                    }
+                    
+                    // 保存到应用数据目录
+                    QString filePath = dir.absolutePath() + "/" + nickname + ".png";
+                    
+                    // 如果文件已存在，先删除
+                    QFile existingFile(filePath);
+                    if (existingFile.exists()) {
+                        bool removed = existingFile.remove();
+                        qDebug() << "删除已存在的头像文件结果:" << removed;
+                    }
+                    
+                    QFile file(filePath);
+                    if (file.open(QIODevice::WriteOnly)) {
+                        qint64 bytesWritten = file.write(data);
+                        file.close();
+                        
+                        if (bytesWritten == data.size()) {
+                            qDebug() << "头像保存成功:" << filePath;
+                            
+                            // 设置文件权限确保可读写
+                            QFile::setPermissions(filePath, QFile::ReadOwner | QFile::WriteOwner);
+                            
+                            // 更新缓存
+                            m_avatarCache[nickname] = filePath;
+                            
+                            // 保存头像路径到设置
+                            QSettings settings;
+                            settings.beginGroup("AvatarCache");
+                            settings.setValue(nickname, filePath);
+                            settings.endGroup();
+                            settings.sync(); // 确保立即写入磁盘
+                            
+                            emit avatarReceived(nickname, filePath);
+                            qDebug() << "已发送avatarReceived信号，路径:" << filePath;
+                        } else {
+                            qDebug() << "头像保存失败: 写入的字节数不匹配，预期:" << data.size() << "，实际:" << bytesWritten;
+                        }
+                    } else {
+                        qDebug() << "无法打开文件进行写入:" << filePath << ", 错误:" << file.errorString();
+                    }
+                } else {
+                    qDebug() << "用户" << nickname << "的头像数据为空";
+                }
+            } else if (msgData["status"].toString() == "error") {
+                qDebug() << "获取头像失败：" << msgData["reason"].toString();
+            } else {
+                qDebug() << "收到的头像响应格式不正确";
+            }
             break;
         }
+
+        default:
+            qDebug() << "未处理的消息类型:" << type;
+            break;
     }
 }
 
@@ -618,7 +730,6 @@ void ChatWindow::updateFriendOnlineStatus(const QString &friendName, bool isOnli
     }
 }
 
-// 添加新的处理函数
 void ChatWindow::handleAcceptFriendMessage(const QJsonObject &msgData)
 {
     qDebug() << "处理接受好友请求消息：" << msgData;
@@ -686,7 +797,6 @@ void ChatWindow::handleDeleteFriendRequestMessage(const QJsonObject &msgData)
     }
 }
 
-// 群聊相关函数实现
 void ChatWindow::createGroup(const QString &groupName, const QStringList &members)
 {
     if (!m_isLoggedIn) {
@@ -926,4 +1036,190 @@ void ChatWindow::handleGroupChatMessage(const QJsonObject &msgData)
             emit statusMessage(QString("来自群聊 %1 的新消息（%2：%3）").arg(groupName, from, content));
         }
     }
+}
+
+void ChatWindow::requestUserProfile() {
+    if (!m_isLoggedIn) {
+        emit statusMessage("请先登录以查看个人资料");
+        return;
+    }
+    
+    if (m_socket && m_socket->state() == QAbstractSocket::ConnectedState) {
+        QJsonObject data;
+        data["nickname"] = m_currentNickname;
+        
+        QByteArray request = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::GetUserProfile, data)).toJson();
+        m_socket->write(request);
+        m_socket->flush();
+    } else {
+        emit statusMessage("未连接到服务器，无法获取个人资料");
+    }
+}
+
+void ChatWindow::updateUserProfile(const QString &nickname, const QString &signature, 
+                                 const QString &gender, const QString &birthday,
+                                 const QString &location, const QString &phone) {
+    if (!m_isLoggedIn) {
+        emit statusMessage("请先登录以更新个人资料");
+        return;
+    }
+    
+    if (m_socket && m_socket->state() == QAbstractSocket::ConnectedState) {
+        QJsonObject data;
+        data["nickname"] = nickname;
+        data["signature"] = signature;
+        data["gender"] = gender;
+        data["birthday"] = birthday;
+        data["location"] = location;
+        data["phone"] = phone;
+        
+        QByteArray request = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::UpdateUserProfile, data)).toJson();
+        m_socket->write(request);
+        m_socket->flush();
+    } else {
+        emit statusMessage("未连接到服务器，无法更新个人资料");
+    }
+}
+
+void ChatWindow::uploadAvatar(const QString &filePath) {
+    if (!m_isLoggedIn) {
+        emit statusMessage("请先登录以上传头像");
+        return;
+    }
+    
+    // 加载图片文件
+    QFile file(QUrl(filePath).toLocalFile());
+    if (!file.open(QIODevice::ReadOnly)) {
+        emit statusMessage("无法打开图片文件");
+        return;
+    }
+    
+    QByteArray fileData = file.readAll();
+    file.close();
+    
+    // 检查文件大小
+    if (fileData.size() > 5 * 1024 * 1024) { // 5MB最大限制
+        emit statusMessage("图片文件过大，请选择小于5MB的文件");
+        return;
+    }
+    
+    // 转换为Base64编码以便在JSON中传输
+    QString base64Data = QString::fromLatin1(fileData.toBase64());
+    
+    if (m_socket && m_socket->state() == QAbstractSocket::ConnectedState) {
+        QJsonObject data;
+        data["nickname"] = m_currentNickname;
+        data["avatar_data"] = base64Data;
+        
+        QByteArray request = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::UploadAvatar, data)).toJson();
+        m_socket->write(request);
+        m_socket->flush();
+        
+        // 保存上传的头像到本地，以便下次使用
+        QString permanentDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/avatars/";
+        QDir dir(permanentDir);
+        if (!dir.exists()) {
+            dir.mkpath(".");
+        }
+        
+        // 复制当前选择的头像到永久存储位置
+        QString permanentPath = permanentDir + m_currentNickname + ".png";
+        
+        // 确保文件可以被写入
+        QFile destFile(permanentPath);
+        if (destFile.exists()) {
+            destFile.remove(); // 如果文件已存在，先删除
+        }
+        
+        if (QFile::copy(QUrl(filePath).toLocalFile(), permanentPath)) {
+            // 确保复制后的文件具有正确的权限
+            QFile::setPermissions(permanentPath, QFile::ReadOwner | QFile::WriteOwner);
+            
+            // 更新缓存
+            m_avatarCache[m_currentNickname] = permanentPath;
+            
+            // 保存到设置
+            QSettings settings;
+            settings.beginGroup("AvatarCache");
+            settings.setValue(m_currentNickname, permanentPath);
+            settings.endGroup();
+            settings.sync();
+            
+            qDebug() << "已保存上传的头像到本地缓存:" << permanentPath;
+            
+            // 发送信号，立即更新UI
+            emit avatarReceived(m_currentNickname, permanentPath);
+        } else {
+            qDebug() << "无法复制头像文件到本地存储:" << permanentPath;
+        }
+        
+        emit statusMessage("正在上传头像...");
+    } else {
+        emit statusMessage("未连接到服务器，无法上传头像");
+    }
+}
+
+void ChatWindow::requestAvatar(const QString &nickname) {
+    // 首先尝试从设置中加载缓存路径
+    QSettings settings;
+    settings.beginGroup("AvatarCache");
+    QString settingsPath = settings.value(nickname, "").toString();
+    settings.endGroup();
+    
+    // 如果设置中有路径但缓存中没有，则更新缓存
+    if (!settingsPath.isEmpty() && !m_avatarCache.contains(nickname)) {
+        QFileInfo fileInfo(settingsPath);
+        if (fileInfo.exists() && fileInfo.isFile() && fileInfo.size() > 0) {
+            m_avatarCache[nickname] = settingsPath;
+            qDebug() << "从设置中恢复头像缓存:" << settingsPath;
+        }
+    }
+    
+    // 检查缓存中是否存在此用户的头像
+    if (m_avatarCache.contains(nickname)) {
+        QString cachedPath = m_avatarCache[nickname];
+        QFileInfo fileInfo(cachedPath);
+        
+        // 验证缓存的文件是否真实存在
+        if (fileInfo.exists() && fileInfo.isFile() && fileInfo.size() > 0) {
+            qDebug() << "使用缓存的头像:" << cachedPath;
+            emit avatarReceived(nickname, cachedPath);
+            return;
+        } else {
+            // 缓存路径无效，从缓存和设置中移除
+            qDebug() << "缓存的头像文件不存在或无效:" << cachedPath;
+            m_avatarCache.remove(nickname);
+            
+            // 从设置中也删除
+            settings.beginGroup("AvatarCache");
+            settings.remove(nickname);
+            settings.endGroup();
+            settings.sync();
+        }
+    }
+    
+    // 如果缓存中没有或缓存无效，则请求服务器的头像
+    if (m_socket && m_socket->state() == QAbstractSocket::ConnectedState) {
+        QJsonObject data;
+        data["nickname"] = nickname;
+        
+        QByteArray request = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::GetAvatar, data)).toJson();
+        
+        qDebug() << "向服务器请求用户" << nickname << "的头像";
+        m_socket->write(request);
+        m_socket->flush(); // 确保立即发送请求
+    } else {
+        qDebug() << "无法请求头像，socket未连接";
+    }
+}
+
+QString ChatWindow::getCachedAvatarPath(const QString &nickname) const {
+    if (m_avatarCache.contains(nickname)) {
+        return "file:///" + m_avatarCache[nickname];
+    }
+    return "qrc:/images/default_avatar.png";
 }

@@ -3,12 +3,20 @@
 #include <QQmlContext>
 #include <QDir>
 #include <QDateTime>
+#include <QStandardPaths>
 #include "chatwindow.h"
 #include "logger.h"
 #include "config.h"
 
 int main(int argc, char *argv[]) {
     QGuiApplication app(argc, argv);
+    app.setOrganizationName("ModernChat");
+    app.setOrganizationDomain("modern.chat");
+
+    // 创建应用程序所需的目录
+    QDir dir;
+    QString tempPath = QStandardPaths::writableLocation(QStandardPaths::TempLocation) + "/ModernChat/avatars/";
+    dir.mkpath(tempPath);
 
     // 初始化日志系统
     QString logPath = QGuiApplication::applicationDirPath() + "/" + Config::Logging::ClientLogDir;
@@ -27,10 +35,10 @@ int main(int argc, char *argv[]) {
     }
 
     QQmlApplicationEngine engine;
-    ChatWindow chatWindow;
+    ChatWindow *chatWindow = new ChatWindow(&app);
 
     // 将 ChatWindow 暴露给 QML 作为上下文属性
-    engine.rootContext()->setContextProperty("chatWindow", &chatWindow);
+    engine.rootContext()->setContextProperty("chatWindow", chatWindow);
 
     const QUrl url(QStringLiteral("qrc:/qml/main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,

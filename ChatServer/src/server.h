@@ -49,6 +49,12 @@ private:
     bool notifyFriendRequest(const QString &to, const QString &from);
     bool deleteFriendRequest(const QString &from, const QString &to);
     
+    // 用户个人信息相关函数
+    QJsonObject getUserProfile(const QString &nickname);
+    bool updateUserProfile(const QString &nickname, const QJsonObject &profileData);
+    bool saveAvatar(const QString &nickname, const QByteArray &avatarData);
+    QByteArray getAvatar(const QString &nickname);
+    
     // 群聊相关函数
     bool createGroup(const QString &creator, const QString &groupName, const QStringList &members);
     QStringList getGroupList(const QString &user);
