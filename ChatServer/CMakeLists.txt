@@ -13,6 +13,8 @@ add_executable(ChatServer
     src/server.h
     ../Common/messageprotocol.cpp
     ../Common/messageprotocol.h
+    ../Common/logger.cpp
+    ../Common/logger.h
     ../Common/config.h
     ../Common/utils.h
 )
