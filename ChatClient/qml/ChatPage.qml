@@ -270,11 +270,12 @@ Rectangle {
 
     Connections {
         target: chatWindow
-        function onMessageReceived(sender, content, timestamp) {
+        function onMessageReceived(sender, content, timestamp, avatarSource) {
             messageModel.append({
                 "sender": sender,
                 "content": content,
-                "timestamp": timestamp
+                "timestamp": timestamp,
+                "avatarSource": avatarSource
             });
         }
         function onChatDisplayCleared() {

@@ -461,6 +461,12 @@ void ChatWindow::handleServerData()
                         QString sender = msgObj.value("from").toString();
                         QString content = msgObj.value("content").toString();
                         QString timestamp = QDateTime::currentDateTime().toString("hh:mm");
+                        
+                        // 如果缓存中没有该用户的头像，则尝试获取
+                        if (!m_avatarCache.contains(sender)) {
+                            requestAvatar(sender);
+                        }
+                        
                         appendMessage(sender, content, timestamp);
                     }
                 }
@@ -591,7 +597,8 @@ void ChatWindow::handleServerData()
                 
                 if (messages.isEmpty()) {
                     qDebug() << "群聊历史记录为空，显示提示信息";
-                    emit groupChatMessageReceived("系统", "暂无群聊记录", QDateTime::currentDateTime().toString("hh:mm"));
+                    QString systemAvatarPath = "qrc:/images/default_avatar.png"; // 系统消息使用默认头像
+                    emit groupChatMessageReceived("系统", "暂无群聊记录", QDateTime::currentDateTime().toString("hh:mm"), systemAvatarPath);
                 } else {
                     for (const QJsonValue &messageVal : messages) {
                         QJsonObject message = messageVal.toObject();
@@ -599,7 +606,15 @@ void ChatWindow::handleServerData()
                         QString content = message["content"].toString();
                         QString timestamp = QDateTime::fromString(message["timestamp"].toString(), Qt::ISODate).toString("hh:mm");
                         
-                        emit groupChatMessageReceived(sender, content, timestamp);
+                        // 如果缓存中没有该用户的头像，则尝试获取
+                        if (!m_avatarCache.contains(sender)) {
+                            requestAvatar(sender);
+                        }
+                        
+                        // 获取头像路径
+                        QString avatarPath = getCachedAvatarPath(sender);
+                        
+                        emit groupChatMessageReceived(sender, content, timestamp, avatarPath);
                     }
                 }
             }
@@ -930,9 +945,11 @@ void ChatWindow::sendGroupMessage(const QString &content)
         
         // 立即在本地显示消息
         QString timestamp = QDateTime::currentDateTime().toString("hh:mm");
+        // 获取自己的头像路径
+        QString avatarPath = getCachedAvatarPath(m_currentNickname);
         // 使用groupChatMessageReceived信号替代appendMessage，以保持一致的消息处理
         qDebug() << "发出groupChatMessageReceived信号，发送者:" << m_currentNickname << "内容:" << message;
-        emit groupChatMessageReceived(m_currentNickname, message, timestamp);
+        emit groupChatMessageReceived(m_currentNickname, message, timestamp, avatarPath);
     } else {
         emit statusMessage("未连接到服务器，无法发送群聊消息。");
     }
@@ -1047,10 +1064,19 @@ void ChatWindow::handleGroupChatMessage(const QJsonObject &msgData)
         qDebug() << "收到群聊消息，来自:" << from << "，内容:" << content << "，群ID:" << groupId
                  << "，当前群ID:" << m_currentChatGroup << "，是否为群聊模式:" << m_isGroupChat;
         
+        // 尝试获取发送者的头像
+        if (!m_avatarCache.contains(from)) {
+            // 如果缓存中没有该用户的头像，则请求获取
+            requestAvatar(from);
+        }
+        
+        // 获取头像路径
+        QString avatarPath = getCachedAvatarPath(from);
+        
         if (QString::number(groupId) == m_currentChatGroup) {
             // 发出群聊消息信号，而不是直接添加到消息模型
             qDebug() << "为当前选中的群聊发出消息信号";
-            emit groupChatMessageReceived(from, content, timestamp);
+            emit groupChatMessageReceived(from, content, timestamp, avatarPath);
         } else {
             QString groupName = m_groupNames.value(QString::number(groupId), "未知群聊");
             emit statusMessage(QString("来自群聊 %1 的新消息（%2：%3）").arg(groupName, from, content));

@@ -477,25 +477,27 @@ Rectangle {
 
     Connections {
         target: chatWindow
-        function onMessageReceived(sender, content, timestamp) {
+        function onMessageReceived(sender, content, timestamp, avatarSource) {
             // 仅当在一对一聊天中显示
             console.log("收到一对一消息信号，发送者:", sender, "，当前是否为群聊:", chatWindow.isGroupChat);
             if (!chatWindow.isGroupChat) {
                 messageModel.append({
                     "sender": sender,
                     "content": content,
-                    "timestamp": timestamp
+                    "timestamp": timestamp,
+                    "avatarSource": avatarSource
                 });
                 console.log("添加一对一消息到列表");
             }
         }
         
-        function onGroupChatMessageReceived(sender, content, timestamp) {
+        function onGroupChatMessageReceived(sender, content, timestamp, avatarSource) {
             console.log("收到群聊消息信号，发送者:", sender, "，当前是否为群聊:", chatWindow.isGroupChat);
             messageModel.append({
                 "sender": sender,
                 "content": content,
-                "timestamp": timestamp
+                "timestamp": timestamp,
+                "avatarSource": avatarSource
             });
             console.log("添加群聊消息到列表");
         }
@@ -511,10 +513,26 @@ Rectangle {
     }
 
     Component.onCompleted: {
+        // 使用正确的参数列表接收信号
+        function onGroupChatMessageReceived(sender, content, timestamp, avatarSource) {
+            console.log("收到群聊消息信号，发送者:", sender, "，当前是否为群聊:", chatWindow.isGroupChat);
+            messageModel.append({
+                "sender": sender,
+                "content": content,
+                "timestamp": timestamp,
+                "avatarSource": avatarSource
+            });
+            console.log("添加群聊消息到列表");
+        }
+        
         chatWindow.groupChatMessageReceived.connect(onGroupChatMessageReceived);
     }
 
     Component.onDestruction: {
+        // 断开连接时也需要使用正确的参数格式
+        function onGroupChatMessageReceived(sender, content, timestamp, avatarSource) {
+            // 仅用于断开连接，函数体可以为空
+        }
         chatWindow.groupChatMessageReceived.disconnect(onGroupChatMessageReceived);
     }
 }

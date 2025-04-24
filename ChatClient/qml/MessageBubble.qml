@@ -30,18 +30,33 @@ Item {
             clip: true
             
             Image {
+                id: avatarImage
                 anchors.fill: parent
                 source: avatarSource
                 fillMode: Image.PreserveAspectCrop
                 layer.enabled: true
                 layer.smooth: true
+                onStatusChanged: {
+                    if (status === Image.Error) {
+                        console.log("头像图片加载失败:", avatarSource);
+                    } else if (status === Image.Ready) {
+                        console.log("头像图片加载成功:", avatarSource);
+                    }
+                }
             }
             
-            Text {
-                anchors.centerIn: parent
-                text: sender ? sender.charAt(0).toUpperCase() : "?"
-                font { pixelSize: 18; bold: true }
-                visible: !parent.children[1].visible
+            // 显示默认背景色和用户首字母，当图像加载失败时
+            Rectangle {
+                anchors.fill: parent
+                color: theme.borderColor
+                visible: avatarImage.status === Image.Error || avatarImage.status === Image.Null
+                
+                Text {
+                    anchors.centerIn: parent
+                    text: sender ? sender.charAt(0).toUpperCase() : "?"
+                    font.pixelSize: parent.width * 0.5
+                    color: theme.backgroundColor
+                }
             }
         }
         
@@ -69,8 +84,8 @@ Item {
                     width: Math.min(contentText.implicitWidth + 16, layout.width * 0.7)
                     height: contentText.implicitHeight + 16
                     radius: 12
-                    color: isOwnMessage ? "#95EC69" : "#FFF"
-                    border.color: isOwnMessage ? "#95EC69" : "#E0E0E0"
+                    color: isOwnMessage ? "#40E0D0" : "#FFF"
+                    border.color: isOwnMessage ? "#40E0D0" : "#E0E0E0"
                     
                     anchors.right: isOwnMessage ? parent.right : undefined
                     anchors.left: isOwnMessage ? undefined : parent.left

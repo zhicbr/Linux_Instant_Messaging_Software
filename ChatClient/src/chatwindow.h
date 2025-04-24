@@ -100,7 +100,7 @@ signals:
     void currentChatGroupChanged();
     void isGroupChatChanged();
     void groupCreated(const QString &groupName);
-    void groupChatMessageReceived(const QString &sender, const QString &content, const QString &timestamp);
+    void groupChatMessageReceived(const QString &sender, const QString &content, const QString &timestamp, const QString &avatarSource);
     void userProfileChanged();
     void avatarReceived(const QString &nickname, const QString &localPath);
     void profileUpdateSuccess();
