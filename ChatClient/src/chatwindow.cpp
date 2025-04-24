@@ -9,6 +9,7 @@
 #include <QFile>
 #include <QSettings>
 #include <QFileInfo>
+#include <QTime>
 
 ChatWindow::ChatWindow(QObject *parent)
     : QObject(parent), m_socket(new QTcpSocket(this)), m_isLoggedIn(false)
@@ -263,7 +264,26 @@ void ChatWindow::deleteFriendRequest(const QString &friendName)
 
 void ChatWindow::appendMessage(const QString &sender, const QString &content, const QString &timestamp)
 {
-    emit messageReceived(sender, content, timestamp);
+    QString avatarPath = "";
+    
+    // 如果是自己的消息，使用自己的头像
+    if (sender == m_currentNickname) {
+        avatarPath = getCachedAvatarPath(m_currentNickname);
+    } else {
+        // 获取好友头像路径
+        avatarPath = getCachedAvatarPath(sender);
+    }
+    
+    QVariantMap message;
+    message["sender"] = sender;
+    message["content"] = content;
+    message["timestamp"] = timestamp.isEmpty() ? QTime::currentTime().toString("hh:mm") : timestamp;
+    message["avatarSource"] = avatarPath;
+    
+    emit messageReceived(message["sender"].toString(), 
+                         message["content"].toString(), 
+                         message["timestamp"].toString(),
+                         message["avatarSource"].toString());
 }
 
 void ChatWindow::clearChatDisplay()

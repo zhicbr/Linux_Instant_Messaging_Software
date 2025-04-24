@@ -83,7 +83,10 @@ signals:
     void isLoggedInChanged();
     void currentNicknameChanged();
     void currentChatFriendChanged();
-    void messageReceived(const QString &sender, const QString &content, const QString &timestamp);
+    signals:
+        // 修改消息接收信号，添加头像参数
+        void messageReceived(const QString &sender, const QString &content, const QString &timestamp, const QString &avatarSource);
+        void refreshChatMessages();
     void statusMessage(const QString &message);
     void friendListUpdated(const QStringList &friends);
     void friendRequestsChanged();

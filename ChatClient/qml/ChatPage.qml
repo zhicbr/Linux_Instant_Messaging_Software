@@ -193,7 +193,7 @@ Rectangle {
             spacing: 0
 
             ListView {
-                id: chatDisplay
+                id: messageListView
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 model: ListModel { id: messageModel }
@@ -201,12 +201,14 @@ Rectangle {
                     sender: model.sender
                     content: model.content
                     timestamp: model.timestamp
-                    isSelf: sender === chatWindow.currentNickname
+                    avatarSource: model.avatarSource || ""
+                    isOwnMessage: model.sender === chatWindow.currentNickname
+                    width: parent.width
                 }
                 clip: true
                 ScrollBar.vertical: ScrollBar {}
                 onCountChanged: Qt.callLater(function() {
-                    chatDisplay.positionViewAtEnd();
+                    messageListView.positionViewAtEnd();
                 })
             }
 

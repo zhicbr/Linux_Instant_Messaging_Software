@@ -206,7 +206,7 @@ Rectangle {
                     sender: model.sender
                     content: model.content
                     timestamp: model.timestamp
-                    isSelf: sender === chatWindow.currentNickname
+                    isOwnMessage: model.sender === chatWindow.currentNickname
                 }
                 clip: true
                 ScrollBar.vertical: ScrollBar {}
@@ -517,4 +517,4 @@ Rectangle {
     Component.onDestruction: {
         chatWindow.groupChatMessageReceived.disconnect(onGroupChatMessageReceived);
     }
-} 
+}
