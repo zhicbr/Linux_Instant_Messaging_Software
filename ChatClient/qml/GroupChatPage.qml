@@ -158,7 +158,24 @@ Rectangle {
                             anchors.fill: parent
                             onClicked: {
                                 let groupId = modelData.split(':')[0];
+                                // 立即设置UI状态，不等待服务器响应
+                                groupTitle.text = chatWindow.getGroupName(groupId);
+                                
+                                // 添加一个系统提示消息，表明正在加载聊天记录
+                                messageModel.clear();
+                                messageModel.append({
+                                    "sender": "系统",
+                                    "content": "正在加载聊天记录...",
+                                    "timestamp": new Date().toLocaleTimeString(Qt.locale(), "hh:mm"),
+                                    "avatarSource": "qrc:/images/default_avatar.png"
+                                });
+                                
+                                // 选择群聊并加载消息
                                 chatWindow.selectGroup(groupId);
+                                
+                                // 添加重试机制，如果2秒后仍未收到消息，则再次请求
+                                retryTimer.groupId = groupId;
+                                retryTimer.restart();
                             }
                         }
                     }
@@ -206,7 +223,9 @@ Rectangle {
                     sender: model.sender
                     content: model.content
                     timestamp: model.timestamp
+                    avatarSource: model.avatarSource || ""
                     isOwnMessage: model.sender === chatWindow.currentNickname
+                    width: parent.width
                 }
                 clip: true
                 ScrollBar.vertical: ScrollBar {}
@@ -513,26 +532,26 @@ Rectangle {
     }
 
     Component.onCompleted: {
-        // 使用正确的参数列表接收信号
-        function onGroupChatMessageReceived(sender, content, timestamp, avatarSource) {
-            console.log("收到群聊消息信号，发送者:", sender, "，当前是否为群聊:", chatWindow.isGroupChat);
-            messageModel.append({
-                "sender": sender,
-                "content": content,
-                "timestamp": timestamp,
-                "avatarSource": avatarSource
-            });
-            console.log("添加群聊消息到列表");
-        }
-        
-        chatWindow.groupChatMessageReceived.connect(onGroupChatMessageReceived);
+        // 不在这里连接信号，因为已经在Connections中处理了
     }
 
     Component.onDestruction: {
-        // 断开连接时也需要使用正确的参数格式
-        function onGroupChatMessageReceived(sender, content, timestamp, avatarSource) {
-            // 仅用于断开连接，函数体可以为空
+        // 不需要断开连接，因为未手动连接
+    }
+    
+    // 添加重试计时器，用于在第一次请求未收到响应时重试
+    Timer {
+        id: retryTimer
+        interval: 1000 // 1秒后重试
+        repeat: false
+        property string groupId: ""
+        
+        onTriggered: {
+            console.log("重试加载群聊信息，群ID:", groupId);
+            if (messageModel.count === 1 && messageModel.get(0).sender === "系统") {
+                // 如果当前只有系统消息，说明之前的请求可能失败了，重新请求
+                chatWindow.selectGroup(groupId);
+            }
         }
-        chatWindow.groupChatMessageReceived.disconnect(onGroupChatMessageReceived);
     }
 }

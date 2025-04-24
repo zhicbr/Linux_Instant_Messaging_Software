@@ -584,9 +584,14 @@ void ChatWindow::handleServerData()
             break;
             
         case MessageType::GroupChat:
-            // 仅处理服务器的确认响应，实际消息在handleGroupChatMessage中处理
+            // 处理服务器发来的群聊消息
             if (msgData.contains("status") && msgData["status"].toString() == "failed") {
                 emit statusMessage("发送群聊消息失败：" + msgData["reason"].toString("未知错误"));
+            } 
+            // 如果消息包含group_id和content，表示这是一条群聊消息
+            else if (msgData.contains("group_id") && msgData.contains("content") && msgData.contains("from")) {
+                // 直接转发给handleGroupChatMessage处理
+                handleGroupChatMessage(msgData);
             }
             break;
             
@@ -899,21 +904,51 @@ void ChatWindow::selectGroup(const QString &groupId)
     m_currentChatFriend.clear();
     emit currentChatFriendChanged();
     
-    // 设置群聊状态
+    // 设置群聊状态（先设置这些，让UI可以立即响应）
     m_currentChatGroup = groupId;
     m_isGroupChat = true;
-    qDebug() << "设置isGroupChat为true，当前值:" << m_isGroupChat;
+    
+    // 立即发出信号通知UI更新
     emit currentChatGroupChanged();
     emit isGroupChatChanged();
     
     // 清除聊天显示
     clearChatDisplay();
     
-    // 获取群成员列表
-    getGroupMembers(groupId);
-    
-    // 加载群聊历史
-    loadGroupChatHistory(groupId);
+    // 确保消息能可靠地发送到服务器
+    if (m_socket && m_socket->state() == QAbstractSocket::ConnectedState) {
+        // 先延迟一小段时间，确保状态更新到服务器
+        QTimer::singleShot(50, this, [this, groupId]() {
+            if (m_socket && m_socket->state() == QAbstractSocket::ConnectedState) {
+                // 1. 请求群成员
+                QJsonObject membersData;
+                membersData["group_id"] = groupId.toInt();
+                QByteArray membersRequest = QJsonDocument(MessageProtocol::createMessage(
+                    MessageType::GroupMembers, membersData)).toJson();
+                
+                qDebug() << "发送获取群成员请求，群ID:" << groupId;
+                m_socket->write(membersRequest);
+                m_socket->flush();
+                
+                // 等待一小段时间确保请求不会合并
+                QTimer::singleShot(50, this, [this, groupId]() {
+                    if (m_socket && m_socket->state() == QAbstractSocket::ConnectedState) {
+                        // 2. 请求聊天历史
+                        QJsonObject historyData;
+                        historyData["group_id"] = groupId.toInt();
+                        QByteArray historyRequest = QJsonDocument(MessageProtocol::createMessage(
+                            MessageType::GroupChatHistory, historyData)).toJson();
+                        
+                        qDebug() << "发送获取群聊历史请求，群ID:" << groupId;
+                        m_socket->write(historyRequest);
+                        m_socket->flush();
+                    }
+                });
+            }
+        });
+    } else {
+        emit statusMessage("未连接到服务器，无法加载群聊信息。");
+    }
 }
 
 void ChatWindow::sendGroupMessage(const QString &content)
