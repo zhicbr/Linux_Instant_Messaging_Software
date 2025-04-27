@@ -9,7 +9,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
 # 查找 Qt6 模块，仅保留 QML 相关模块
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Network Quick Qml)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Network Quick Qml Widgets)
 
 # 定义源文件
 set(SOURCES
@@ -43,6 +43,7 @@ target_link_libraries(ChatClient PRIVATE
     Qt6::Network
     Qt6::Quick
     Qt6::Qml
+    Qt6::Widgets
 )
 
 # 设置目标属性

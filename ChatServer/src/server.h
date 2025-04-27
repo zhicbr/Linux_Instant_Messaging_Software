@@ -49,6 +49,9 @@ private:
     QMutex m_clientsMutex;  // 保护clients列表的互斥锁
     QSqlDatabase db;
 
+    // 图片存储路径
+    QString m_imageStoragePath;
+
     // 线程池
     ThreadPool *m_threadPool;
 
@@ -103,6 +106,28 @@ private:
     QJsonArray getGroupChatHistory(int groupId);
     bool notifyGroupMessage(int groupId, const QString &from, const QString &content);
     bool notifyGroupCreation(const QString &member, int groupId, const QString &groupName, const QString &creator);
+
+    // 图片处理相关函数
+    bool saveImage(const QString &imageId, const QByteArray &imageData);
+    QByteArray getImage(const QString &imageId);
+    QString generateUniqueImageId(const QString &fileExtension);
+
+    // 分块图片上传相关函数
+    void handleChunkedImageStart(QTcpSocket *clientSocket, const QJsonObject &msgData, ClientInfo *clientInfo);
+    void handleChunkedImageChunk(QTcpSocket *clientSocket, const QJsonObject &msgData, ClientInfo *clientInfo);
+    void handleChunkedImageEnd(QTcpSocket *clientSocket, const QJsonObject &msgData, ClientInfo *clientInfo);
+
+    // 临时存储分块上传的图片数据
+    struct ChunkedImageData {
+        QString tempId;
+        QString fileExtension;
+        int totalChunks;
+        int receivedChunks;
+        QByteArray imageData;
+        int width;
+        int height;
+    };
+    QMap<QString, ChunkedImageData> m_pendingChunkedImages;
 };
 
 #endif

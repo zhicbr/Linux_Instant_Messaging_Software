@@ -31,19 +31,34 @@ enum MessageType {
     GroupMembers = 18,  // 获取群成员列表
     GroupChat = 19,     // 群聊消息
     GroupChatHistory = 20, // 群聊历史记录
-    
+
     // 用户个人信息相关消息类型
     GetUserProfile = 21,    // 获取用户个人资料
     UpdateUserProfile = 22, // 更新用户个人资料
     UploadAvatar = 23,      // 上传头像
-    GetAvatar = 24          // 获取头像
+    GetAvatar = 24,         // 获取头像
+
+    // 图片消息相关类型
+    UploadImageRequest = 25,   // C->S: 请求上传图片 (含 Base64 数据)
+    UploadImageResponse = 26,  // S->C: 图片上传结果 (返回 imageId)
+    DownloadImageRequest = 27, // C->S: 请求下载图片 (根据 imageId)
+    DownloadImageResponse = 28, // S->C: 返回图片数据 (Base64)
+
+    // 分块图片传输相关类型
+    ChunkedImageStart = 29,    // C->S: 开始分块图片传输 (包含总块数、文件信息)
+    ChunkedImageChunk = 30,    // C->S: 图片数据块 (包含块索引和数据)
+    ChunkedImageEnd = 31,      // C->S: 结束分块图片传输 (确认所有块已发送)
+    ChunkedImageResponse = 32, // S->C: 分块图片传输响应 (成功/失败)
+
+    // 二进制图片数据传输
+    BinaryImageData = 33       // S->C: 二进制图片数据 (不使用JSON)
 };
 
 class MessageProtocol {
 public:
     static QJsonObject createMessage(MessageType type, const QJsonObject &data);
     static bool parseMessage(const QByteArray &data, MessageType &type, QJsonObject &msgData);
-    
+
     // 获取消息类型的字符串表示
     static QString messageTypeToString(MessageType type) {
         switch (type) {
@@ -70,6 +85,15 @@ public:
             case MessageType::UpdateUserProfile: return "UpdateUserProfile";
             case MessageType::UploadAvatar: return "UploadAvatar";
             case MessageType::GetAvatar: return "GetAvatar";
+            case MessageType::UploadImageRequest: return "UploadImageRequest";
+            case MessageType::UploadImageResponse: return "UploadImageResponse";
+            case MessageType::DownloadImageRequest: return "DownloadImageRequest";
+            case MessageType::DownloadImageResponse: return "DownloadImageResponse";
+            case MessageType::ChunkedImageStart: return "ChunkedImageStart";
+            case MessageType::ChunkedImageChunk: return "ChunkedImageChunk";
+            case MessageType::ChunkedImageEnd: return "ChunkedImageEnd";
+            case MessageType::ChunkedImageResponse: return "ChunkedImageResponse";
+            case MessageType::BinaryImageData: return "BinaryImageData";
             default: return "Unknown";
         }
     }

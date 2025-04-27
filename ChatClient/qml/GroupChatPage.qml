@@ -1,6 +1,7 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import Qt.labs.platform 1.1 // Use Qt.labs.platform instead of QtQuick.Dialogs
 
 Rectangle {
     color: theme.backgroundColor
@@ -76,20 +77,20 @@ Rectangle {
                     Layout.fillWidth: true
                     height: 30
                     color: theme.borderColor
-                    
+
                     RowLayout {
                         anchors.fill: parent
                         anchors.leftMargin: 10
-                        
+
                         Text {
                             text: "我的群聊"
                             font.bold: true
                             font.pixelSize: 14
                             color: theme.primaryTextColor
                         }
-                        
+
                         Item { Layout.fillWidth: true }
-                        
+
                         Button {
                             text: "刷新"
                             Layout.preferredWidth: 60
@@ -117,25 +118,25 @@ Rectangle {
                     Layout.fillHeight: true
                     clip: true
                     model: chatWindow.groupList
-                    
+
                     delegate: Rectangle {
                         width: groupListView.width
                         height: 50
-                        color: chatWindow.currentChatGroup === modelData.split(':')[0] ? 
-                            (appSettings.darkTheme ? "#3B4252" : "#CED4DA") : 
+                        color: chatWindow.currentChatGroup === modelData.split(':')[0] ?
+                            (appSettings.darkTheme ? "#3B4252" : "#CED4DA") :
                             (appSettings.darkTheme ? theme.sidebarColor : "#F8F9FA")
-                        
+
                         RowLayout {
                             anchors.fill: parent
                             anchors.margins: 8
                             spacing: 10
-                            
+
                             Rectangle {
                                 Layout.preferredWidth: 34
                                 Layout.preferredHeight: 34
                                 radius: 17
                                 color: appSettings.darkTheme ? "#A6E3A1" : "#28A745"
-                                
+
                                 Text {
                                     anchors.centerIn: parent
                                     text: modelData.split(':')[1].charAt(0).toUpperCase()
@@ -144,7 +145,7 @@ Rectangle {
                                     color: appSettings.darkTheme ? "#1E1E2E" : "white"
                                 }
                             }
-                            
+
                             Text {
                                 Layout.fillWidth: true
                                 text: modelData.split(':')[1]
@@ -153,14 +154,14 @@ Rectangle {
                                 elide: Text.ElideRight
                             }
                         }
-                        
+
                         MouseArea {
                             anchors.fill: parent
                             onClicked: {
                                 let groupId = modelData.split(':')[0];
                                 // 立即设置UI状态，不等待服务器响应
                                 groupTitle.text = chatWindow.getGroupName(groupId);
-                                
+
                                 // 添加一个系统提示消息，表明正在加载聊天记录
                                 messageModel.clear();
                                 messageModel.append({
@@ -169,17 +170,17 @@ Rectangle {
                                     "timestamp": new Date().toLocaleTimeString(Qt.locale(), "hh:mm"),
                                     "avatarSource": "qrc:/images/default_avatar.png"
                                 });
-                                
+
                                 // 选择群聊并加载消息
                                 chatWindow.selectGroup(groupId);
-                                
+
                                 // 添加重试机制，如果2秒后仍未收到消息，则再次请求
                                 retryTimer.groupId = groupId;
                                 retryTimer.restart();
                             }
                         }
                     }
-                    
+
                     ScrollBar.vertical: ScrollBar {}
                 }
             }
@@ -190,22 +191,22 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 0
-            
+
             // 群聊标题
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 40
                 color: theme.sidebarColor
                 border.color: theme.borderColor
-                
+
                 RowLayout {
                     anchors.fill: parent
                     anchors.leftMargin: 15
                     anchors.rightMargin: 15
-                    
+
                     Text {
                         id: groupTitle
-                        text: chatWindow.isGroupChat ? 
+                        text: chatWindow.isGroupChat ?
                             chatWindow.getGroupName(chatWindow.currentChatGroup) : "请选择一个群聊"
                         font.pixelSize: 16
                         font.bold: true
@@ -246,6 +247,38 @@ Rectangle {
                     anchors.margins: 10
                     spacing: 10
 
+                    Button {
+                        id: imageButton
+                        Layout.preferredWidth: 40
+                        Layout.preferredHeight: 40
+                        enabled: chatWindow.isGroupChat
+
+                        background: Rectangle {
+                            color: parent.enabled ?
+                                (parent.pressed ? "#e0e0e0" : "#f0f0f0") :
+                                (appSettings.darkTheme ? "#45475A" : "#B0B0B0")
+                            radius: 4
+                        }
+
+                        contentItem: Text {
+                            text: "📷"
+                            font.pixelSize: 20
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            color: imageButton.enabled ? theme.primaryTextColor : theme.secondaryTextColor
+                        }
+
+                        onClicked: {
+                            groupImageFileDialog.open();
+                        }
+
+                        ToolTip {
+                            visible: parent.hovered && parent.enabled
+                            text: "发送图片"
+                            delay: 500
+                        }
+                    }
+
                     TextField {
                         id: messageInput
                         Layout.fillWidth: true
@@ -274,8 +307,8 @@ Rectangle {
                         font.pixelSize: 14
                         enabled: chatWindow.isGroupChat
                         background: Rectangle {
-                            color: parent.enabled ? 
-                                (parent.pressed ? theme.primaryButtonPressedColor : theme.primaryButtonColor) : 
+                            color: parent.enabled ?
+                                (parent.pressed ? theme.primaryButtonPressedColor : theme.primaryButtonColor) :
                                 (appSettings.darkTheme ? "#45475A" : "#B0B0B0")
                             radius: 4
                         }
@@ -295,7 +328,7 @@ Rectangle {
                 }
             }
         }
-        
+
         // 右侧群成员列表
         Rectangle {
             Layout.preferredWidth: 200
@@ -304,44 +337,44 @@ Rectangle {
             border.color: theme.borderColor
             border.width: 1
             visible: chatWindow.isGroupChat
-            
+
             ColumnLayout {
                 anchors.fill: parent
                 anchors.margins: 10
                 spacing: 10
-                
+
                 Text {
                     text: "群成员"
                     font.bold: true
                     font.pixelSize: 16
                     color: theme.primaryTextColor
                 }
-                
+
                 ListView {
                     id: membersListView
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     clip: true
                     model: chatWindow.groupMembers
-                    
+
                     delegate: Rectangle {
                         width: membersListView.width
                         height: 40
                         color: appSettings.darkTheme ? theme.inputBackgroundColor : "#F8F9FA"
-                        
+
                         RowLayout {
                             anchors.fill: parent
                             anchors.margins: 5
                             spacing: 10
-                            
+
                             Rectangle {
                                 Layout.preferredWidth: 30
                                 Layout.preferredHeight: 30
                                 radius: 15
-                                color: chatWindow.isFriendOnline(modelData) ? 
-                                    (appSettings.darkTheme ? "#A6E3A1" : "#28A745") : 
+                                color: chatWindow.isFriendOnline(modelData) ?
+                                    (appSettings.darkTheme ? "#A6E3A1" : "#28A745") :
                                     (appSettings.darkTheme ? "#A6ADC8" : "#6C757D")
-                                
+
                                 Text {
                                     anchors.centerIn: parent
                                     text: modelData.charAt(0).toUpperCase()
@@ -350,7 +383,7 @@ Rectangle {
                                     color: appSettings.darkTheme && chatWindow.isFriendOnline(modelData) ? "#1E1E2E" : "white"
                                 }
                             }
-                            
+
                             Text {
                                 Layout.fillWidth: true
                                 text: modelData
@@ -360,34 +393,36 @@ Rectangle {
                             }
                         }
                     }
-                    
+
                     ScrollBar.vertical: ScrollBar {}
                 }
             }
         }
     }
-    
+
     // 创建群聊对话框
-    Dialog {
+    Popup {
         id: createGroupDialog
-        title: "创建新群聊"
+        property string title: "创建新群聊"
         modal: true
-        standardButtons: Dialog.Ok | Dialog.Cancel
         width: 400
-        
+        height: 400
+
         anchors.centerIn: parent
-        
+
         background: Rectangle {
             color: theme.inputBackgroundColor
             border.color: theme.borderColor
             border.width: 1
             radius: 6
         }
-        
-        header: Rectangle {
-            color: theme.sidebarColor
+
+        Rectangle {
+            id: dialogHeader
+            width: parent.width
             height: 50
-            
+            color: theme.sidebarColor
+
             Text {
                 anchors.centerIn: parent
                 text: createGroupDialog.title
@@ -396,8 +431,9 @@ Rectangle {
                 color: theme.primaryTextColor
             }
         }
-        
-        onAccepted: {
+
+        // 使用自定义函数代替onAccepted
+        function accept() {
             // 获取选中的好友作为群成员
             let selectedMembers = [];
             for (let i = 0; i < friendsCheckboxModel.count; i++) {
@@ -405,7 +441,7 @@ Rectangle {
                     selectedMembers.push(friendsCheckboxModel.get(i).name);
                 }
             }
-            
+
             if (selectedMembers.length > 0 && groupNameField.text.trim() !== "") {
                 chatWindow.createGroup(groupNameField.text, selectedMembers);
                 groupNameField.text = "";
@@ -413,76 +449,105 @@ Rectangle {
                 for (let i = 0; i < friendsCheckboxModel.count; i++) {
                     friendsCheckboxModel.setProperty(i, "checked", false);
                 }
+                close();
             } else {
                 chatWindow.setStatusMessage("请输入群聊名称并选择至少一个成员");
             }
         }
-        
-        onRejected: {
+
+        // 使用自定义函数代替onRejected
+        function reject() {
             groupNameField.text = "";
             // 重置选中状态
             for (let i = 0; i < friendsCheckboxModel.count; i++) {
                 friendsCheckboxModel.setProperty(i, "checked", false);
             }
+            close();
         }
-        
-        contentItem: ColumnLayout {
-            spacing: 15
-            
-            RowLayout {
-                Layout.fillWidth: true
-                
-                Label {
-                    text: "群聊名称："
-                    Layout.preferredWidth: 80
-                }
-                
-                TextField {
-                    id: groupNameField
+
+        contentItem: Item {
+            anchors.fill: parent
+            anchors.topMargin: dialogHeader.height
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 15
+                spacing: 15
+
+                RowLayout {
                     Layout.fillWidth: true
-                    placeholderText: "输入群聊名称"
+
+                    Label {
+                        text: "群聊名称："
+                        Layout.preferredWidth: 80
+                        color: theme.primaryTextColor
+                    }
+
+                    TextField {
+                        id: groupNameField
+                        Layout.fillWidth: true
+                        placeholderText: "输入群聊名称"
+                    }
                 }
-            }
-            
-            Label {
-                text: "选择群成员："
-                font.bold: true
-            }
-            
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 200
-                border.color: "#DEE2E6"
-                
-                ScrollView {
-                    anchors.fill: parent
-                    clip: true
-                    
-                    ListView {
-                        id: friendsCheckList
+
+                Label {
+                    text: "选择群成员："
+                    font.bold: true
+                    color: theme.primaryTextColor
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    border.color: "#DEE2E6"
+
+                    ScrollView {
                         anchors.fill: parent
-                        model: ListModel { id: friendsCheckboxModel }
-                        
-                        delegate: CheckBox {
-                            text: name
-                            checked: model.checked
-                            onCheckedChanged: friendsCheckboxModel.setProperty(index, "checked", checked)
+                        clip: true
+
+                        ListView {
+                            id: friendsCheckList
+                            anchors.fill: parent
+                            model: ListModel { id: friendsCheckboxModel }
+
+                            delegate: CheckBox {
+                                text: name
+                                checked: model.checked
+                                onCheckedChanged: friendsCheckboxModel.setProperty(index, "checked", checked)
+                            }
+
+                            Component.onCompleted: {
+                                // 填充好友列表
+                                refreshFriendsList();
+                            }
                         }
-                        
-                        Component.onCompleted: {
-                            // 填充好友列表
-                            refreshFriendsList();
-                        }
+                    }
+                }
+
+                // 添加按钮行
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignRight
+                    spacing: 10
+
+                    Button {
+                        text: "取消"
+                        onClicked: createGroupDialog.reject()
+                    }
+
+                    Button {
+                        text: "确定"
+                        onClicked: createGroupDialog.accept()
                     }
                 }
             }
         }
-        
+
         // 在对话框打开时刷新好友列表
         onOpened: {
             refreshFriendsList();
         }
-        
+
         function refreshFriendsList() {
             friendsCheckboxModel.clear();
             for (let i = 0; i < chatWindow.friendList.length; i++) {
@@ -491,6 +556,19 @@ Rectangle {
                     checked: false
                 });
             }
+        }
+    }
+
+    // 图片选择对话框
+    FileDialog {
+        id: groupImageFileDialog
+        title: "选择图片"
+        nameFilters: ["图片文件 (*.jpg *.jpeg *.png *.gif)"]
+        fileMode: FileDialog.OpenFile
+
+        onAccepted: {
+            // 发送图片消息
+            chatWindow.sendImageMessage(groupImageFileDialog.file.toString());
         }
     }
 
@@ -509,7 +587,7 @@ Rectangle {
                 console.log("添加一对一消息到列表");
             }
         }
-        
+
         function onGroupChatMessageReceived(sender, content, timestamp, avatarSource) {
             console.log("收到群聊消息信号，发送者:", sender, "，当前是否为群聊:", chatWindow.isGroupChat);
             messageModel.append({
@@ -520,14 +598,120 @@ Rectangle {
             });
             console.log("添加群聊消息到列表");
         }
-        
+
         function onChatDisplayCleared() {
             messageModel.clear();
             console.log("清空消息列表");
         }
-        
+
         function onGroupCreated(groupName) {
-            createGroupDialog.close();
+            if (createGroupDialog.visible) {
+                createGroupDialog.close();
+            }
+        }
+
+        function onImageDownloaded(imageId, localPath) {
+            console.log("群聊页面：图片下载完成，ID:", imageId, "本地路径:", localPath);
+            // 不再需要刷新整个列表，我们会通过imageMessageUpdated信号更新特定消息
+        }
+
+        function onUpdatePlaceholderMessages(imageId, jsonContent) {
+            console.log("群聊页面：更新图片占位符消息，ID:", imageId, "内容:", jsonContent);
+
+            // 查找并更新所有包含"[图片加载中...]"的消息
+            for (var i = 0; i < messageModel.count; i++) {
+                var content = messageModel.get(i).content;
+
+                // 检查是否是占位符消息
+                if (content === "[图片加载中...]") {
+                    console.log("群聊页面：找到图片占位符消息，索引:", i);
+
+                    // 获取当前消息的所有属性
+                    var currentMessage = messageModel.get(i);
+                    var sender = currentMessage.sender;
+                    var timestamp = currentMessage.timestamp;
+                    var avatarSource = currentMessage.avatarSource;
+
+                    // 更新消息内容，保留其他属性
+                    messageModel.set(i, {
+                        "sender": sender,
+                        "content": jsonContent,
+                        "timestamp": timestamp,
+                        "avatarSource": avatarSource
+                    });
+                }
+            }
+
+            // 强制ListView刷新
+            chatDisplay.forceLayout();
+        }
+
+        function onImageMessageUpdated(imageId, jsonContent) {
+            console.log("群聊页面：更新图片消息，ID:", imageId, "内容:", jsonContent);
+
+            // 查找并更新包含该图片ID的消息
+            for (var i = 0; i < messageModel.count; i++) {
+                var content = messageModel.get(i).content;
+
+                // 检查消息内容是否包含该图片ID
+                if (content.indexOf(imageId) !== -1) {
+                    console.log("群聊页面：找到包含图片ID的消息，索引:", i);
+
+                    // 更新消息内容
+                    messageModel.set(i, {
+                        "content": jsonContent
+                    });
+
+                    // 获取当前消息的所有属性
+                    var currentMessage = messageModel.get(i);
+                    var sender = currentMessage.sender;
+                    var timestamp = currentMessage.timestamp;
+                    var avatarSource = currentMessage.avatarSource;
+
+                    // 更新消息内容，保留其他属性
+                    messageModel.set(i, {
+                        "sender": sender,
+                        "content": jsonContent,
+                        "timestamp": timestamp,
+                        "avatarSource": avatarSource
+                    });
+
+                    // 如果有多个消息包含同一个图片ID，继续查找
+                    continue;
+                }
+
+                // 尝试解析JSON内容
+                try {
+                    var contentObj = JSON.parse(content);
+                    if (contentObj && contentObj.type === "image" && contentObj.imageId === imageId) {
+                        console.log("群聊页面：找到包含图片ID的JSON消息，索引:", i);
+
+                        // 更新消息内容
+                        messageModel.set(i, {
+                            "content": jsonContent
+                        });
+
+                        // 获取当前消息的所有属性
+                        var currentMessage = messageModel.get(i);
+                        var sender = currentMessage.sender;
+                        var timestamp = currentMessage.timestamp;
+                        var avatarSource = currentMessage.avatarSource;
+
+                        // 更新消息内容，保留其他属性
+                        messageModel.set(i, {
+                            "sender": sender,
+                            "content": jsonContent,
+                            "timestamp": timestamp,
+                            "avatarSource": avatarSource
+                        });
+                    }
+                } catch (e) {
+                    // 不是JSON，继续检查下一条消息
+                }
+            }
+
+            // 强制ListView刷新
+            chatDisplay.forceLayout();
         }
     }
 
@@ -538,14 +722,14 @@ Rectangle {
     Component.onDestruction: {
         // 不需要断开连接，因为未手动连接
     }
-    
+
     // 添加重试计时器，用于在第一次请求未收到响应时重试
     Timer {
         id: retryTimer
         interval: 1000 // 1秒后重试
         repeat: false
         property string groupId: ""
-        
+
         onTriggered: {
             console.log("重试加载群聊信息，群ID:", groupId);
             if (messageModel.count === 1 && messageModel.get(0).sender === "系统") {

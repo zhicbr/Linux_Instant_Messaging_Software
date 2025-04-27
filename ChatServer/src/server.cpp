@@ -40,6 +40,11 @@ Server::Server(QObject *parent) : QObject(parent) {
     // 设置信号处理函数
     ProcessManager::setupSignalHandlers();
 
+    // 初始化图片存储路径
+    m_imageStoragePath = QCoreApplication::applicationDirPath() + "/../chat_images/";
+    QDir().mkpath(m_imageStoragePath);
+    qDebug() << "图片存储路径：" << m_imageStoragePath;
+
     // 初始化TCP服务器
     tcpServer = new QTcpServer(this);
     connect(tcpServer, &QTcpServer::newConnection, this, &Server::handleNewConnection);
@@ -115,7 +120,75 @@ void Server::handleClientData() {
     QTcpSocket *clientSocket = qobject_cast<QTcpSocket*>(sender());
     if (!clientSocket) return;
 
+    // 读取所有可用数据
     QByteArray data = clientSocket->readAll();
+
+    // 检查数据是否完整
+    if (data.isEmpty()) {
+        qDebug() << "收到空数据包";
+        return;
+    }
+
+    // 尝试解析JSON
+    QJsonParseError parseError;
+    QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+
+    if (parseError.error != QJsonParseError::NoError) {
+        qDebug() << "JSON解析错误:" << parseError.errorString() << "，位置:" << parseError.offset;
+        qDebug() << "数据大小:" << data.size() << "字节";
+
+        // 尝试查找消息类型，特别处理分块图片上传
+        if (data.contains("\"type\":30") || data.contains("\"type\": 30")) {
+            // 这可能是一个ChunkedImageChunk消息
+            // 尝试提取tempId和chunk_index
+            int tempIdPos = data.indexOf("\"temp_id\"");
+            int chunkIndexPos = data.indexOf("\"chunk_index\"");
+            int chunkDataPos = data.indexOf("\"chunk_data\"");
+
+            if (tempIdPos > 0 && chunkIndexPos > 0 && chunkDataPos > 0) {
+                // 尝试提取tempId
+                int tempIdStart = data.indexOf("\"", tempIdPos + 10) + 1;
+                int tempIdEnd = data.indexOf("\"", tempIdStart);
+                QString tempId = QString::fromUtf8(data.mid(tempIdStart, tempIdEnd - tempIdStart));
+
+                // 尝试提取chunk_index
+                int chunkIndexStart = chunkIndexPos + 14;
+                int chunkIndexEnd = data.indexOf(",", chunkIndexStart);
+                if (chunkIndexEnd < 0) chunkIndexEnd = data.indexOf("}", chunkIndexStart);
+                QString chunkIndexStr = QString::fromUtf8(data.mid(chunkIndexStart, chunkIndexEnd - chunkIndexStart));
+                int chunkIndex = chunkIndexStr.trimmed().toInt();
+
+                // 尝试提取chunk_data (Base64)
+                int chunkDataStart = data.indexOf("\"", chunkDataPos + 13) + 1;
+                int chunkDataEnd = data.lastIndexOf("\"");
+                QByteArray chunkDataBase64 = data.mid(chunkDataStart, chunkDataEnd - chunkDataStart);
+
+                // 解码Base64数据
+                QByteArray chunkData = QByteArray::fromBase64(chunkDataBase64);
+
+                // 检查是否存在对应的分块上传记录
+                if (m_pendingChunkedImages.contains(tempId)) {
+                    // 获取分块上传记录
+                    ChunkedImageData &chunkedData = m_pendingChunkedImages[tempId];
+
+                    // 添加到图片数据中
+                    chunkedData.imageData.append(chunkData);
+                    chunkedData.receivedChunks++;
+
+                    qDebug() << "手动解析接收到图片数据块:" << chunkIndex + 1 << "/" << chunkedData.totalChunks
+                             << "，大小:" << chunkData.size() << "字节";
+
+                    return;
+                }
+            }
+        }
+
+        // 如果数据太大，可能需要分片处理
+        if (data.size() > 1024 * 1024) { // 大于1MB的数据
+            qDebug() << "数据过大，可能需要分片处理";
+        }
+        return;
+    }
 
     // 使用线程池处理客户端请求
     m_threadPool->addTask([this, clientSocket, data]() {
@@ -137,15 +210,38 @@ QSqlDatabase Server::getThreadLocalDatabase() {
 
     // 检查当前线程是否已有数据库连接
     if (QSqlDatabase::contains(connectionName)) {
-        return QSqlDatabase::database(connectionName);
+        QSqlDatabase db = QSqlDatabase::database(connectionName);
+
+        // 检查连接是否有效
+        if (!db.isOpen()) {
+            qDebug() << "数据库连接已存在但未打开，尝试重新打开";
+            if (!db.open()) {
+                qDebug() << "重新打开数据库连接失败:" << db.lastError().text();
+            } else {
+                qDebug() << "成功重新打开数据库连接";
+            }
+        }
+
+        return db;
     }
 
     // 为当前线程创建新的数据库连接
     QString dbPath = QCoreApplication::applicationDirPath() + "/../users.db";
-    QSqlDatabase threadDb = QSqlDatabase::addDatabase("QSQLITE", connectionName);
-    threadDb.setDatabaseName(dbPath);
 
-    if (!threadDb.open()) {
+    // 使用互斥锁保护数据库连接创建过程
+    static QMutex connectionMutex;
+    QMutexLocker locker(&connectionMutex);
+
+    QSqlDatabase threadDb;
+    if (QSqlDatabase::contains(connectionName)) {
+        // 双重检查，避免在获取锁的过程中其他线程已创建连接
+        threadDb = QSqlDatabase::database(connectionName);
+    } else {
+        threadDb = QSqlDatabase::addDatabase("QSQLITE", connectionName);
+        threadDb.setDatabaseName(dbPath);
+    }
+
+    if (!threadDb.isOpen() && !threadDb.open()) {
         qDebug() << "Error: Failed to open database for thread:" << threadDb.lastError().text();
     } else {
         qDebug() << "Successfully opened database connection for thread" << QThread::currentThreadId();
@@ -167,7 +263,7 @@ void Server::processClientData(QTcpSocket *clientSocket, const QByteArray &data)
         return;
     }
 
-    qDebug() << "收到消息类型:" << static_cast<int>(type);
+    qDebug() << "收到消息类型:" << static_cast<int>(type) << " - " << MessageProtocol::messageTypeToString(type);
 
     // 获取对应的客户端信息
     ClientInfo *clientInfo = nullptr;
@@ -243,7 +339,54 @@ void Server::processClientData(QTcpSocket *clientSocket, const QByteArray &data)
         {
             QString to = msgData["to"].toString();
             QString content = msgData["content"].toString();
-            saveChatMessage(clientInfo->nickname, to, content);
+
+            // 获取线程本地数据库连接
+            QSqlDatabase threadDb = getThreadLocalDatabase();
+
+            // 确保数据库连接有效
+            if (!threadDb.isOpen()) {
+                qDebug() << "数据库连接未打开，尝试重新打开";
+                if (!threadDb.open()) {
+                    qDebug() << "无法打开数据库连接:" << threadDb.lastError().text();
+                    QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Database error"}})).toJson();
+                    QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                             Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
+                    return;
+                }
+            }
+
+            // 检查content是否已经是JSON格式
+            QJsonDocument contentDoc = QJsonDocument::fromJson(content.toUtf8());
+            QString finalContent;
+
+            if (contentDoc.isNull() || !contentDoc.isObject()) {
+                // 如果不是有效的JSON，则将其包装为文本消息JSON
+                QJsonObject textMsg;
+                textMsg["type"] = "text";
+                textMsg["text"] = content;
+                finalContent = QJsonDocument(textMsg).toJson(QJsonDocument::Compact);
+            } else {
+                // 已经是JSON格式，直接使用
+                finalContent = content;
+            }
+
+            // 保存消息到数据库
+            QSqlQuery query(threadDb);
+            query.prepare("INSERT INTO messages (from_nickname, to_nickname, content) VALUES (?, ?, ?)");
+            query.addBindValue(clientInfo->nickname);
+            query.addBindValue(to);
+            query.addBindValue(finalContent);
+
+            bool saveSuccess = query.exec();
+            if (!saveSuccess) {
+                qDebug() << "保存消息失败:" << query.lastError().text();
+                QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Failed to save message"}})).toJson();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
+                return;
+            }
+
+            // 发送消息给目标用户
             QJsonObject privateMsg;
             privateMsg["from"] = clientInfo->nickname;
             privateMsg["content"] = content;
@@ -698,8 +841,45 @@ void Server::processClientData(QTcpSocket *clientSocket, const QByteArray &data)
             int groupId = msgData["group_id"].toInt();
             QString content = msgData["content"].toString();
 
+            // 获取线程本地数据库连接
+            QSqlDatabase threadDb = getThreadLocalDatabase();
+
+            // 确保数据库连接有效
+            if (!threadDb.isOpen()) {
+                qDebug() << "数据库连接未打开，尝试重新打开";
+                if (!threadDb.open()) {
+                    qDebug() << "无法打开数据库连接:" << threadDb.lastError().text();
+                    QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::GroupChat, {{"status", "failed"}, {"reason", "Database error"}})).toJson();
+                    QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                             Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
+                    return;
+                }
+            }
+
+            // 检查content是否已经是JSON格式
+            QJsonDocument contentDoc = QJsonDocument::fromJson(content.toUtf8());
+            QString finalContent;
+
+            if (contentDoc.isNull() || !contentDoc.isObject()) {
+                // 如果不是有效的JSON，则将其包装为文本消息JSON
+                QJsonObject textMsg;
+                textMsg["type"] = "text";
+                textMsg["text"] = content;
+                finalContent = QJsonDocument(textMsg).toJson(QJsonDocument::Compact);
+            } else {
+                // 已经是JSON格式，直接使用
+                finalContent = content;
+            }
+
             // 保存消息到数据库
-            if (saveGroupChatMessage(groupId, clientInfo->nickname, content)) {
+            QSqlQuery query(threadDb);
+            query.prepare("INSERT INTO group_messages (group_id, from_nickname, content) VALUES (?, ?, ?)");
+            query.addBindValue(groupId);
+            query.addBindValue(clientInfo->nickname);
+            query.addBindValue(finalContent);
+
+            bool saveSuccess = query.exec();
+            if (saveSuccess) {
                 // 通知其他群成员
                 notifyGroupMessage(groupId, clientInfo->nickname, content);
 
@@ -710,9 +890,10 @@ void Server::processClientData(QTcpSocket *clientSocket, const QByteArray &data)
                 QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
                                          Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
             } else {
+                qDebug() << "保存群聊消息失败:" << query.lastError().text();
                 QJsonObject response;
                 response["status"] = "failed";
-                response["reason"] = "发送群消息失败";
+                response["reason"] = "发送群消息失败: " + query.lastError().text();
                 QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(MessageType::GroupChat, response)).toJson();
                 QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
                                          Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
@@ -922,6 +1103,202 @@ void Server::processClientData(QTcpSocket *clientSocket, const QByteArray &data)
         }
         break;
     }
+    case MessageType::UploadImageRequest: {
+        if (!clientInfo->isLoggedIn) {
+            QJsonObject response;
+            response["status"] = "failed";
+            response["reason"] = "Please login first";
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::UploadImageResponse, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+            return;
+        }
+
+        // 从请求中获取图片数据和文件扩展名
+        QString imageDataBase64 = msgData["image_data_base64"].toString();
+        QString fileExtension = msgData["file_extension"].toString();
+        QString tempId = msgData["temp_id"].toString();
+
+        if (imageDataBase64.isEmpty() || fileExtension.isEmpty()) {
+            QJsonObject response;
+            response["status"] = "failed";
+            response["reason"] = "Invalid image data or file extension";
+            if (!tempId.isEmpty()) {
+                response["temp_id"] = tempId;
+            }
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::UploadImageResponse, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+            return;
+        }
+
+        // 解码Base64数据
+        QByteArray imageData = QByteArray::fromBase64(imageDataBase64.toLatin1());
+
+        // 生成唯一的图片ID
+        QString imageId = generateUniqueImageId(fileExtension);
+
+        // 保存图片
+        if (saveImage(imageId, imageData)) {
+            QJsonObject response;
+            response["status"] = "success";
+            response["imageId"] = imageId;
+            if (!tempId.isEmpty()) {
+                response["temp_id"] = tempId;
+            }
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::UploadImageResponse, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+            qDebug() << "图片上传成功，ID:" << imageId << "，临时ID:" << tempId;
+        } else {
+            QJsonObject response;
+            response["status"] = "failed";
+            response["reason"] = "Error saving image";
+            if (!tempId.isEmpty()) {
+                response["temp_id"] = tempId;
+            }
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::UploadImageResponse, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+            qDebug() << "图片上传失败，临时ID:" << tempId;
+        }
+        break;
+    }
+
+    case MessageType::ChunkedImageStart: {
+        if (!clientInfo->isLoggedIn) {
+            QJsonObject response;
+            response["status"] = "failed";
+            response["reason"] = "Please login first";
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::ChunkedImageResponse, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+            return;
+        }
+        handleChunkedImageStart(clientSocket, msgData, clientInfo);
+        break;
+    }
+
+    case MessageType::ChunkedImageChunk: {
+        if (!clientInfo->isLoggedIn) {
+            QJsonObject response;
+            response["status"] = "failed";
+            response["reason"] = "Please login first";
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::ChunkedImageResponse, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+            return;
+        }
+        handleChunkedImageChunk(clientSocket, msgData, clientInfo);
+        break;
+    }
+
+    case MessageType::ChunkedImageEnd: {
+        if (!clientInfo->isLoggedIn) {
+            QJsonObject response;
+            response["status"] = "failed";
+            response["reason"] = "Please login first";
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::ChunkedImageResponse, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+            return;
+        }
+        handleChunkedImageEnd(clientSocket, msgData, clientInfo);
+        break;
+    }
+    case MessageType::DownloadImageRequest: {
+        if (!clientInfo->isLoggedIn) {
+            QJsonObject response;
+            response["status"] = "failed";
+            response["reason"] = "Please login first";
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::DownloadImageResponse, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+            return;
+        }
+
+        // 从请求中获取图片ID
+        QString imageId = msgData["imageId"].toString();
+
+        if (imageId.isEmpty()) {
+            QJsonObject response;
+            response["status"] = "failed";
+            response["reason"] = "Invalid image ID";
+            response["imageId"] = imageId; // 返回原始imageId，方便客户端匹配
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::DownloadImageResponse, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+            return;
+        }
+
+        // 获取图片数据
+        QByteArray imageData = getImage(imageId);
+
+        if (!imageData.isEmpty()) {
+            // 直接使用二进制格式，不发送JSON预告
+            // 格式: [4字节魔数][4字节消息类型][4字节图片ID长度][图片ID][4字节图片数据长度][图片数据]
+            QByteArray binaryPacket;
+
+            // 魔数: "IMGD" (Image Data)
+            binaryPacket.append("IMGD", 4);
+
+            // 消息类型
+            qint32 messageType = static_cast<qint32>(MessageType::BinaryImageData);
+            binaryPacket.append(reinterpret_cast<const char*>(&messageType), sizeof(messageType));
+
+            // 图片ID长度
+            qint32 imageIdLength = imageId.toUtf8().length();
+            binaryPacket.append(reinterpret_cast<const char*>(&imageIdLength), sizeof(imageIdLength));
+
+            // 图片ID
+            binaryPacket.append(imageId.toUtf8());
+
+            // 图片数据长度
+            qint32 imageDataLength = imageData.size();
+            binaryPacket.append(reinterpret_cast<const char*>(&imageDataLength), sizeof(imageDataLength));
+
+            // 图片数据
+            binaryPacket.append(imageData);
+
+            // 打印前几个字节用于调试
+            QString hexData;
+            for (int i = 0; i < qMin(32, binaryPacket.size()); ++i) {
+                hexData += QString("%1 ").arg(static_cast<unsigned char>(binaryPacket[i]), 2, 16, QChar('0'));
+            }
+            qDebug() << "二进制数据包前32字节:" << hexData;
+            qDebug() << "二进制数据包总大小:" << binaryPacket.size() << "字节，图片ID长度:" << imageIdLength
+                     << "，图片数据长度:" << imageDataLength;
+
+            // 直接发送二进制数据包，不使用QueuedConnection
+            clientSocket->write(binaryPacket);
+            clientSocket->flush();
+
+            // 确保数据发送完成
+            clientSocket->waitForBytesWritten(5000);
+
+            qDebug() << "图片下载成功，ID:" << imageId << "，大小:" << imageData.size() << "字节，使用二进制模式发送";
+        } else {
+            QJsonObject response;
+            response["status"] = "failed";
+            response["reason"] = "Image not found or read error";
+            response["imageId"] = imageId; // 返回原始imageId，方便客户端匹配
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::DownloadImageResponse, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+            qDebug() << "图片下载失败，ID:" << imageId;
+        }
+        break;
+    }
     default:
         qDebug() << "未处理的消息类型:" << static_cast<int>(type);
         break;
@@ -1048,6 +1425,16 @@ bool Server::initDatabase() {
         m_dbSemaphore->post();
         m_dbFileLock->unlock();
         return false;
+    }
+
+    // 确保图片存储目录存在
+    QDir imageDir(m_imageStoragePath);
+    if (!imageDir.exists()) {
+        if (!imageDir.mkpath(".")) {
+            qDebug() << "Error: Failed to create image storage directory:" << m_imageStoragePath;
+        } else {
+            qDebug() << "Created image storage directory:" << m_imageStoragePath;
+        }
     }
 
     // 不再删除旧表，保留数据
@@ -1348,11 +1735,26 @@ bool Server::saveChatMessage(const QString &from, const QString &to, const QStri
         return false;
     }
 
+    // 检查content是否已经是JSON格式
+    QJsonDocument contentDoc = QJsonDocument::fromJson(content.toUtf8());
+    QString finalContent;
+
+    if (contentDoc.isNull() || !contentDoc.isObject()) {
+        // 如果不是有效的JSON，则将其包装为文本消息JSON
+        QJsonObject textMsg;
+        textMsg["type"] = "text";
+        textMsg["text"] = content;
+        finalContent = QJsonDocument(textMsg).toJson(QJsonDocument::Compact);
+    } else {
+        // 已经是JSON格式，直接使用
+        finalContent = content;
+    }
+
     QSqlQuery query;
     query.prepare("INSERT INTO messages (from_nickname, to_nickname, content) VALUES (:from, :to, :content)");
     query.bindValue(":from", from);
     query.bindValue(":to", to);
-    query.bindValue(":content", content);
+    query.bindValue(":content", finalContent);
     bool result = query.exec();
 
     // 释放数据库信号量
@@ -1363,7 +1765,7 @@ bool Server::saveChatMessage(const QString &from, const QString &to, const QStri
         QJsonObject msgObj;
         msgObj["from"] = from;
         msgObj["to"] = to;
-        msgObj["content"] = content;
+        msgObj["content"] = finalContent;
         msgObj["timestamp"] = QDateTime::currentDateTime().toString(Qt::ISODate);
 
         QJsonDocument doc(msgObj);
@@ -1395,17 +1797,50 @@ QJsonArray Server::getChatHistory(const QString &user1, const QString &user2) {
         return messages;
     }
 
-    QSqlQuery query;
-    query.prepare("SELECT from_nickname, content FROM messages WHERE (from_nickname = :user1 AND to_nickname = :user2) OR (from_nickname = :user2 AND to_nickname = :user1) ORDER BY timestamp");
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+
+    // 确保数据库连接有效
+    if (!threadDb.isOpen()) {
+        qDebug() << "数据库连接未打开，尝试重新打开";
+        if (!threadDb.open()) {
+            qDebug() << "无法打开数据库连接:" << threadDb.lastError().text();
+            m_dbSemaphore->post();
+            return messages;
+        }
+    }
+
+    QSqlQuery query(threadDb);
+    query.prepare("SELECT from_nickname, content, timestamp FROM messages WHERE (from_nickname = :user1 AND to_nickname = :user2) OR (from_nickname = :user2 AND to_nickname = :user1) ORDER BY timestamp");
     query.bindValue(":user1", user1);
     query.bindValue(":user2", user2);
     if (query.exec()) {
         while (query.next()) {
             QJsonObject msg;
             msg["from"] = query.value("from_nickname").toString();
-            msg["content"] = query.value("content").toString();
+
+            // 获取content，可能是JSON字符串
+            QString contentStr = query.value("content").toString();
+            QJsonDocument contentDoc = QJsonDocument::fromJson(contentStr.toUtf8());
+
+            if (!contentDoc.isNull() && contentDoc.isObject()) {
+                // 如果是有效的JSON对象，直接使用
+                msg["content"] = contentDoc.object();
+            } else {
+                // 如果不是有效的JSON，则将其包装为文本消息JSON
+                QJsonObject textMsg;
+                textMsg["type"] = "text";
+                textMsg["text"] = contentStr;
+                msg["content"] = textMsg;
+            }
+
+            // 添加时间戳
+            msg["timestamp"] = query.value("timestamp").toString();
+
             messages.append(msg);
         }
+    } else {
+        qDebug() << "获取聊天历史失败:" << query.lastError().text();
     }
 
     // 释放数据库信号量
@@ -1732,10 +2167,25 @@ bool Server::saveGroupChatMessage(int groupId, const QString &from, const QStrin
     QSqlDatabase threadDb = getThreadLocalDatabase();
     QSqlQuery query(threadDb);
 
+    // 检查content是否已经是JSON格式
+    QJsonDocument contentDoc = QJsonDocument::fromJson(content.toUtf8());
+    QString finalContent;
+
+    if (contentDoc.isNull() || !contentDoc.isObject()) {
+        // 如果不是有效的JSON，则将其包装为文本消息JSON
+        QJsonObject textMsg;
+        textMsg["type"] = "text";
+        textMsg["text"] = content;
+        finalContent = QJsonDocument(textMsg).toJson(QJsonDocument::Compact);
+    } else {
+        // 已经是JSON格式，直接使用
+        finalContent = content;
+    }
+
     query.prepare("INSERT INTO group_messages (group_id, from_nickname, content) VALUES (?, ?, ?)");
     query.addBindValue(groupId);
     query.addBindValue(from);
-    query.addBindValue(content);
+    query.addBindValue(finalContent);
 
     if (!query.exec()) {
         qDebug() << "保存群聊消息失败：" << query.lastError().text();
@@ -1750,6 +2200,16 @@ QJsonArray Server::getGroupChatHistory(int groupId) {
 
     // 获取线程本地数据库连接
     QSqlDatabase threadDb = getThreadLocalDatabase();
+
+    // 确保数据库连接有效
+    if (!threadDb.isOpen()) {
+        qDebug() << "数据库连接未打开，尝试重新打开";
+        if (!threadDb.open()) {
+            qDebug() << "无法打开数据库连接:" << threadDb.lastError().text();
+            return messages;
+        }
+    }
+
     QSqlQuery query(threadDb);
 
     query.prepare("SELECT from_nickname, content, timestamp FROM group_messages "
@@ -1760,7 +2220,22 @@ QJsonArray Server::getGroupChatHistory(int groupId) {
         while (query.next()) {
             QJsonObject msg;
             msg["from"] = query.value("from_nickname").toString();
-            msg["content"] = query.value("content").toString();
+
+            // 获取content，可能是JSON字符串
+            QString contentStr = query.value("content").toString();
+            QJsonDocument contentDoc = QJsonDocument::fromJson(contentStr.toUtf8());
+
+            if (!contentDoc.isNull() && contentDoc.isObject()) {
+                // 如果是有效的JSON对象，直接使用
+                msg["content"] = contentDoc.object();
+            } else {
+                // 如果不是有效的JSON，则将其包装为文本消息JSON
+                QJsonObject textMsg;
+                textMsg["type"] = "text";
+                textMsg["text"] = contentStr;
+                msg["content"] = textMsg;
+            }
+
             msg["timestamp"] = query.value("timestamp").toString();
             messages.append(msg);
         }
@@ -1776,10 +2251,25 @@ bool Server::notifyGroupMessage(int groupId, const QString &from, const QString 
     QStringList members = getGroupMembers(groupId);
     bool anyNotified = false;
 
+    // 检查content是否已经是JSON格式
+    QJsonDocument contentDoc = QJsonDocument::fromJson(content.toUtf8());
+    QJsonValue contentValue;
+
+    if (!contentDoc.isNull() && contentDoc.isObject()) {
+        // 如果是有效的JSON对象，直接使用
+        contentValue = contentDoc.object();
+    } else {
+        // 如果不是有效的JSON，则将其包装为文本消息JSON
+        QJsonObject textMsg;
+        textMsg["type"] = "text";
+        textMsg["text"] = content;
+        contentValue = textMsg;
+    }
+
     QJsonObject msgData;
     msgData["group_id"] = groupId;
     msgData["from"] = from;
-    msgData["content"] = content;
+    msgData["content"] = contentValue;
 
     QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::GroupChat, msgData)).toJson();
 
@@ -1988,4 +2478,238 @@ QByteArray Server::getAvatar(const QString &nickname) {
     file.close();
 
     return avatarData;
+}
+
+QString Server::generateUniqueImageId(const QString &fileExtension) {
+    // 生成唯一的图片ID，使用UUID加上原始扩展名
+    QString uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    return uuid + "." + fileExtension;
+}
+
+bool Server::saveImage(const QString &imageId, const QByteArray &imageData) {
+    // 确保图片存储目录存在
+    QDir dir(m_imageStoragePath);
+    if (!dir.exists()) {
+        if (!dir.mkpath(".")) {
+            qDebug() << "Error: Failed to create image storage directory:" << m_imageStoragePath;
+            return false;
+        }
+    }
+
+    // 保存图片文件
+    QString imagePath = m_imageStoragePath + imageId;
+    QFile file(imagePath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        qDebug() << "Error: Failed to open image file for writing:" << file.errorString();
+        return false;
+    }
+
+    if (file.write(imageData) == -1) {
+        qDebug() << "Error: Failed to write image data:" << file.errorString();
+        file.close();
+        return false;
+    }
+
+    file.close();
+    qDebug() << "Image saved successfully:" << imagePath;
+    return true;
+}
+
+QByteArray Server::getImage(const QString &imageId) {
+    // 读取图片文件
+    QString imagePath = m_imageStoragePath + imageId;
+    QFile file(imagePath);
+    if (!file.exists() || !file.open(QIODevice::ReadOnly)) {
+        qDebug() << "Error: Failed to open image file for reading:" << file.errorString();
+        return QByteArray();
+    }
+
+    QByteArray imageData = file.readAll();
+    file.close();
+    return imageData;
+}
+
+// 处理分块图片上传开始请求
+void Server::handleChunkedImageStart(QTcpSocket *clientSocket, const QJsonObject &msgData, ClientInfo *clientInfo) {
+    QString tempId = msgData["temp_id"].toString();
+    QString fileExtension = msgData["file_extension"].toString();
+    int totalChunks = msgData["total_chunks"].toInt();
+    int totalSize = msgData["total_size"].toInt();
+    int width = msgData["width"].toInt();
+    int height = msgData["height"].toInt();
+
+    qDebug() << "开始接收分块图片上传，临时ID:" << tempId
+             << "，总块数:" << totalChunks
+             << "，总大小:" << totalSize << "字节";
+
+    // 验证参数
+    if (tempId.isEmpty() || fileExtension.isEmpty() || totalChunks <= 0 || totalSize <= 0) {
+        QJsonObject response;
+        response["status"] = "failed";
+        response["reason"] = "Invalid parameters";
+        response["temp_id"] = tempId;
+
+        QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::ChunkedImageResponse, response)).toJson();
+        QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                 Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+        return;
+    }
+
+    // 创建新的分块图片数据结构
+    ChunkedImageData chunkedData;
+    chunkedData.tempId = tempId;
+    chunkedData.fileExtension = fileExtension;
+    chunkedData.totalChunks = totalChunks;
+    chunkedData.receivedChunks = 0;
+    chunkedData.imageData.reserve(totalSize); // 预分配内存
+    chunkedData.width = width;
+    chunkedData.height = height;
+
+    // 存储到待处理映射中
+    m_pendingChunkedImages[tempId] = chunkedData;
+
+    qDebug() << "分块图片上传初始化成功，等待接收数据块";
+}
+
+// 处理分块图片上传数据块
+void Server::handleChunkedImageChunk(QTcpSocket *clientSocket, const QJsonObject &msgData, ClientInfo *clientInfo) {
+    QString tempId = msgData["temp_id"].toString();
+    int chunkIndex = msgData["chunk_index"].toInt();
+    QString chunkDataBase64 = msgData["chunk_data"].toString();
+
+    // 验证参数
+    if (tempId.isEmpty() || chunkDataBase64.isEmpty() || chunkIndex < 0) {
+        QJsonObject response;
+        response["status"] = "failed";
+        response["reason"] = "Invalid chunk data";
+        response["temp_id"] = tempId;
+
+        QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::ChunkedImageResponse, response)).toJson();
+        QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                 Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+        return;
+    }
+
+    // 检查是否存在对应的分块上传记录
+    if (!m_pendingChunkedImages.contains(tempId)) {
+        QJsonObject response;
+        response["status"] = "failed";
+        response["reason"] = "No active upload found for this ID";
+        response["temp_id"] = tempId;
+
+        QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::ChunkedImageResponse, response)).toJson();
+        QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                 Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+        return;
+    }
+
+    // 获取分块上传记录
+    ChunkedImageData &chunkedData = m_pendingChunkedImages[tempId];
+
+    // 解码数据块
+    QByteArray chunkData = QByteArray::fromBase64(chunkDataBase64.toLatin1());
+
+    // 添加到图片数据中
+    chunkedData.imageData.append(chunkData);
+    chunkedData.receivedChunks++;
+
+    qDebug() << "接收到图片数据块:" << chunkIndex + 1 << "/" << chunkedData.totalChunks
+             << "，大小:" << chunkData.size() << "字节";
+}
+
+// 处理分块图片上传结束请求
+void Server::handleChunkedImageEnd(QTcpSocket *clientSocket, const QJsonObject &msgData, ClientInfo *clientInfo) {
+    QString tempId = msgData["temp_id"].toString();
+
+    // 验证参数
+    if (tempId.isEmpty()) {
+        QJsonObject response;
+        response["status"] = "failed";
+        response["reason"] = "Invalid parameters";
+        response["temp_id"] = tempId;
+
+        QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::ChunkedImageResponse, response)).toJson();
+        QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                 Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+        return;
+    }
+
+    // 检查是否存在对应的分块上传记录
+    if (!m_pendingChunkedImages.contains(tempId)) {
+        QJsonObject response;
+        response["status"] = "failed";
+        response["reason"] = "No active upload found for this ID";
+        response["temp_id"] = tempId;
+
+        QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::ChunkedImageResponse, response)).toJson();
+        QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                 Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+        return;
+    }
+
+    // 获取分块上传记录
+    ChunkedImageData chunkedData = m_pendingChunkedImages.take(tempId);
+
+    // 检查是否接收到足够的数据块
+    // 允许一定的容错，只要接收到了大部分数据块就认为是成功的
+    if (chunkedData.receivedChunks < chunkedData.totalChunks * 0.9) { // 至少接收到90%的数据块
+        QJsonObject response;
+        response["status"] = "failed";
+        response["reason"] = QString("Incomplete upload: received %1 of %2 chunks")
+                            .arg(chunkedData.receivedChunks)
+                            .arg(chunkedData.totalChunks);
+        response["temp_id"] = tempId;
+
+        QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::ChunkedImageResponse, response)).toJson();
+        QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                 Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+
+        qDebug() << "分块图片上传失败，接收到的块数不足:" << chunkedData.receivedChunks
+                 << "/" << chunkedData.totalChunks;
+        return;
+    }
+
+    // 如果接收到的块数不等于总块数，但超过了90%，记录日志但继续处理
+    if (chunkedData.receivedChunks != chunkedData.totalChunks) {
+        qDebug() << "警告：接收到的块数与总块数不一致，但已超过90%，继续处理:"
+                 << chunkedData.receivedChunks << "/" << chunkedData.totalChunks;
+    }
+
+    // 生成唯一的图片ID
+    QString imageId = generateUniqueImageId(chunkedData.fileExtension);
+
+    // 保存图片
+    if (saveImage(imageId, chunkedData.imageData)) {
+        QJsonObject response;
+        response["status"] = "success";
+        response["image_id"] = imageId;
+        response["temp_id"] = tempId;
+
+        QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::ChunkedImageResponse, response)).toJson();
+        QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                 Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+
+        qDebug() << "分块图片上传成功，ID:" << imageId
+                 << "，临时ID:" << tempId
+                 << "，总大小:" << chunkedData.imageData.size() << "字节";
+    } else {
+        QJsonObject response;
+        response["status"] = "failed";
+        response["reason"] = "Failed to save image";
+        response["temp_id"] = tempId;
+
+        QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+            MessageType::ChunkedImageResponse, response)).toJson();
+        QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                 Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+
+        qDebug() << "分块图片上传失败，临时ID:" << tempId;
+    }
 }

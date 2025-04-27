@@ -1,6 +1,7 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import Qt.labs.platform 1.1 // Use Qt.labs.platform instead of QtQuick.Dialogs
 
 Rectangle {
     color: theme.backgroundColor
@@ -166,19 +167,19 @@ Rectangle {
                     Layout.fillHeight: true
                     friendModel: chatWindow.friendList
                     requestModel: chatWindow.friendRequests
-                    
+
                     onFriendSelected: function(friendName) {
                         chatWindow.selectFriend(friendName)
                     }
-                    
+
                     onAcceptRequest: function(friendName) {
                         chatWindow.acceptFriendRequest(friendName)
                     }
-                    
+
                     onDeleteRequest: function(friendName) {
                         chatWindow.deleteFriendRequest(friendName)
                     }
-                    
+
                     onDeleteFriend: function(friendName) {
                         chatWindow.deleteFriend(friendName)
                     }
@@ -224,6 +225,34 @@ Rectangle {
                     anchors.margins: 10
                     spacing: 10
 
+                    Button {
+                        id: imageButton
+                        Layout.preferredWidth: 40
+                        Layout.preferredHeight: 40
+
+                        background: Rectangle {
+                            color: parent.pressed ? "#e0e0e0" : "#f0f0f0"
+                            radius: 4
+                        }
+
+                        contentItem: Text {
+                            text: "📷"
+                            font.pixelSize: 20
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+
+                        onClicked: {
+                            imageFileDialog.open();
+                        }
+
+                        ToolTip {
+                            visible: parent.hovered
+                            text: "发送图片"
+                            delay: 500
+                        }
+                    }
+
                     TextField {
                         id: messageInput
                         Layout.fillWidth: true
@@ -268,6 +297,19 @@ Rectangle {
         }
     }
 
+    // 图片选择对话框
+    FileDialog {
+        id: imageFileDialog
+        title: "选择图片"
+        nameFilters: ["图片文件 (*.jpg *.jpeg *.png *.gif)"]
+        fileMode: FileDialog.OpenFile
+
+        onAccepted: {
+            // 发送图片消息
+            chatWindow.sendImageMessage(imageFileDialog.file.toString());
+        }
+    }
+
     Connections {
         target: chatWindow
         function onMessageReceived(sender, content, timestamp, avatarSource) {
@@ -280,6 +322,109 @@ Rectangle {
         }
         function onChatDisplayCleared() {
             messageModel.clear();
+        }
+        function onImageDownloaded(imageId, localPath) {
+            console.log("图片下载完成，ID:", imageId, "本地路径:", localPath);
+            // 不再需要刷新整个列表，我们会通过imageMessageUpdated信号更新特定消息
+        }
+
+        function onUpdatePlaceholderMessages(imageId, jsonContent) {
+            console.log("更新图片占位符消息，ID:", imageId, "内容:", jsonContent);
+
+            // 查找并更新所有包含"[图片加载中...]"的消息
+            for (var i = 0; i < messageModel.count; i++) {
+                var content = messageModel.get(i).content;
+
+                // 检查是否是占位符消息
+                if (content === "[图片加载中...]") {
+                    console.log("找到图片占位符消息，索引:", i);
+
+                    // 获取当前消息的所有属性
+                    var currentMessage = messageModel.get(i);
+                    var sender = currentMessage.sender;
+                    var timestamp = currentMessage.timestamp;
+                    var avatarSource = currentMessage.avatarSource;
+
+                    // 更新消息内容，保留其他属性
+                    messageModel.set(i, {
+                        "sender": sender,
+                        "content": jsonContent,
+                        "timestamp": timestamp,
+                        "avatarSource": avatarSource
+                    });
+                }
+            }
+
+            // 强制ListView刷新
+            messageListView.forceLayout();
+        }
+
+        function onImageMessageUpdated(imageId, jsonContent) {
+            console.log("更新图片消息，ID:", imageId, "内容:", jsonContent);
+
+            // 查找并更新包含该图片ID的消息
+            for (var i = 0; i < messageModel.count; i++) {
+                var content = messageModel.get(i).content;
+
+                // 检查消息内容是否包含该图片ID
+                if (content.indexOf(imageId) !== -1) {
+                    console.log("找到包含图片ID的消息，索引:", i);
+
+                    // 更新消息内容
+                    messageModel.set(i, {
+                        "content": jsonContent
+                    });
+
+                    // 获取当前消息的所有属性
+                    var currentMessage = messageModel.get(i);
+                    var sender = currentMessage.sender;
+                    var timestamp = currentMessage.timestamp;
+                    var avatarSource = currentMessage.avatarSource;
+
+                    // 更新消息内容，保留其他属性
+                    messageModel.set(i, {
+                        "sender": sender,
+                        "content": jsonContent,
+                        "timestamp": timestamp,
+                        "avatarSource": avatarSource
+                    });
+
+                    // 如果有多个消息包含同一个图片ID，继续查找
+                    continue;
+                }
+
+                // 尝试解析JSON内容
+                try {
+                    var contentObj = JSON.parse(content);
+                    if (contentObj && contentObj.type === "image" && contentObj.imageId === imageId) {
+                        console.log("找到包含图片ID的JSON消息，索引:", i);
+
+                        // 更新消息内容
+                        messageModel.set(i, {
+                            "content": jsonContent
+                        });
+
+                        // 获取当前消息的所有属性
+                        var currentMessage = messageModel.get(i);
+                        var sender = currentMessage.sender;
+                        var timestamp = currentMessage.timestamp;
+                        var avatarSource = currentMessage.avatarSource;
+
+                        // 更新消息内容，保留其他属性
+                        messageModel.set(i, {
+                            "sender": sender,
+                            "content": jsonContent,
+                            "timestamp": timestamp,
+                            "avatarSource": avatarSource
+                        });
+                    }
+                } catch (e) {
+                    // 不是JSON，继续检查下一条消息
+                }
+            }
+
+            // 强制ListView刷新
+            messageListView.forceLayout();
         }
     }
 }
