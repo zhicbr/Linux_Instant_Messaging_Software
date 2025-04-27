@@ -11,8 +11,40 @@
 #include <QThread>
 
 Server::Server(QObject *parent) : QObject(parent) {
+    // 初始化线程池
+    m_threadPool = new ThreadPool(this);
+    m_threadPool->init(QThread::idealThreadCount());
+    qDebug() << "线程池已初始化，线程数：" << m_threadPool->size();
+
+    // 初始化数据库访问信号量
+    m_dbSemaphore = new Semaphore(this);
+    m_dbSemaphore->create("db_semaphore", 1);
+
+    // 初始化数据库文件锁
+    m_dbFileLock = new FileLock(this);
+
+    // 初始化聊天历史读写锁
+    m_chatHistoryLock = new ReadWriteLock(this);
+    m_chatHistoryLock->init();
+
+    // 初始化消息队列
+    m_messageQueue = new ThreadMessageQueue(this);
+
+    // 初始化共享内存
+    m_sharedMemory = new SharedMemory(this);
+    m_sharedMemory->create("/tmp/chat_server", 1024 * 1024); // 1MB
+
+    // 初始化进程管理器
+    m_processManager = new ProcessManager(this);
+
+    // 设置信号处理函数
+    ProcessManager::setupSignalHandlers();
+
+    // 初始化TCP服务器
     tcpServer = new QTcpServer(this);
     connect(tcpServer, &QTcpServer::newConnection, this, &Server::handleNewConnection);
+
+    // 初始化数据库
     if (!initDatabase()) {
         qDebug() << "Failed to initialize database";
         QCoreApplication::quit();
@@ -20,7 +52,23 @@ Server::Server(QObject *parent) : QObject(parent) {
 }
 
 Server::~Server() {
+    // 关闭数据库
     db.close();
+
+    // 终止所有子进程
+    m_processManager->terminateAllChildProcesses();
+
+    // 清理共享内存
+    m_sharedMemory->detach();
+
+    // 清理信号量
+    m_dbSemaphore->close();
+
+    // 清理文件锁
+    m_dbFileLock->close();
+
+    // 清理读写锁
+    m_chatHistoryLock->destroy();
 }
 
 void Server::start() {
@@ -35,12 +83,32 @@ void Server::start() {
 void Server::handleNewConnection() {
     QTcpSocket *clientSocket = tcpServer->nextPendingConnection();
     qDebug() << "New client connected from" << clientSocket->peerAddress().toString() << ":" << clientSocket->peerPort();
-    ClientInfo clientInfo;
-    clientInfo.socket = clientSocket;
-    clientInfo.isLoggedIn = false;
-    clients.append(clientInfo);
+
+    // 使用互斥锁保护clients列表
+    {
+        QMutexLocker locker(&m_clientsMutex);
+        ClientInfo clientInfo;
+        clientInfo.socket = clientSocket;
+        clientInfo.isLoggedIn = false;
+        clients.append(clientInfo);
+    }
+
     connect(clientSocket, &QTcpSocket::readyRead, this, &Server::handleClientData);
     connect(clientSocket, &QTcpSocket::disconnected, this, &Server::handleClientDisconnection);
+
+    // 尝试使用进程管理器创建一个子进程来处理连接
+    // 注意：这里只是演示进程控制，实际上这种场景可能不需要创建子进程
+    static int connectionCount = 0;
+    if (++connectionCount % 5 == 0) { // 每5个连接创建一个子进程
+        QString clientAddress = clientSocket->peerAddress().toString();
+        pid_t pid = m_processManager->startChildProcess("connection_handler",
+                                                      QStringList() << clientAddress
+                                                                   << QString::number(clientSocket->peerPort()));
+        if (pid > 0) {
+            qDebug() << "Started child process for connection" << connectionCount
+                     << "with PID:" << pid;
+        }
+    }
 }
 
 void Server::handleClientData() {
@@ -48,27 +116,71 @@ void Server::handleClientData() {
     if (!clientSocket) return;
 
     QByteArray data = clientSocket->readAll();
-    
+
+    // 使用线程池处理客户端请求
+    m_threadPool->addTask([this, clientSocket, data]() {
+        this->processClientData(clientSocket, data);
+    });
+}
+
+void Server::sendResponseToClient(QTcpSocket *clientSocket, const QByteArray &response) {
+    // 这个方法在主线程中执行，可以安全地操作QTcpSocket
+    if (clientSocket && clientSocket->isOpen()) {
+        clientSocket->write(response);
+        clientSocket->flush();
+    }
+}
+
+QSqlDatabase Server::getThreadLocalDatabase() {
+    // 获取当前线程ID作为连接名
+    QString connectionName = QString("connection_%1").arg((quintptr)QThread::currentThreadId());
+
+    // 检查当前线程是否已有数据库连接
+    if (QSqlDatabase::contains(connectionName)) {
+        return QSqlDatabase::database(connectionName);
+    }
+
+    // 为当前线程创建新的数据库连接
+    QString dbPath = QCoreApplication::applicationDirPath() + "/../users.db";
+    QSqlDatabase threadDb = QSqlDatabase::addDatabase("QSQLITE", connectionName);
+    threadDb.setDatabaseName(dbPath);
+
+    if (!threadDb.open()) {
+        qDebug() << "Error: Failed to open database for thread:" << threadDb.lastError().text();
+    } else {
+        qDebug() << "Successfully opened database connection for thread" << QThread::currentThreadId();
+    }
+
+    return threadDb;
+}
+
+void Server::processClientData(QTcpSocket *clientSocket, const QByteArray &data) {
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+
     // 解析消息
     MessageType type;
     QJsonObject msgData;
-    
+
     if (!MessageProtocol::parseMessage(data, type, msgData)) {
         qDebug() << "解析消息失败!";
         return;
     }
-    
+
     qDebug() << "收到消息类型:" << static_cast<int>(type);
-    
+
     // 获取对应的客户端信息
     ClientInfo *clientInfo = nullptr;
-    for (ClientInfo &info : clients) {
-        if (info.socket == clientSocket) {
-            clientInfo = &info;
-            break;
+    {
+        QMutexLocker locker(&m_clientsMutex); // 保护clients列表的互斥锁
+        for (ClientInfo &info : clients) {
+            if (info.socket == clientSocket) {
+                clientInfo = &info;
+                break;
+            }
         }
     }
-    
+
     // 根据消息类型处理
     switch (type) {
     case MessageType::Register: {
@@ -77,15 +189,21 @@ void Server::handleClientData() {
         QString password = msgData["password"].toString();
         qDebug() << "Register request: email=" << email << ", nickname=" << nickname;
         if (email.isEmpty() || nickname.isEmpty() || password.isEmpty()) {
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Register, {{"status", "failed"}, {"reason", "Empty email, nickname, or password"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Register, {{"status", "failed"}, {"reason", "Empty email, nickname, or password"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             return;
         }
         if (registerUser(email, nickname, password)) {
             qDebug() << "Registration successful for" << nickname;
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Register, {{"status", "success"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Register, {{"status", "success"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
         } else {
             qDebug() << "Registration failed for" << nickname;
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Register, {{"status", "failed"}, {"reason", "Email or nickname already exists"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Register, {{"status", "failed"}, {"reason", "Email or nickname already exists"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
         }
         break;
     }
@@ -94,7 +212,9 @@ void Server::handleClientData() {
         QString password = msgData["password"].toString();
         qDebug() << "Login request: nickname=" << nickname;
         if (nickname.isEmpty() || password.isEmpty()) {
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Login, {{"status", "failed"}, {"reason", "Empty nickname or password"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Login, {{"status", "failed"}, {"reason", "Empty nickname or password"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             return;
         }
         QString loginResult = loginUser(nickname, password, *clientInfo);
@@ -102,16 +222,22 @@ void Server::handleClientData() {
             qDebug() << "Login successful for" << nickname;
             clientInfo->isLoggedIn = true;
             clientInfo->nickname = nickname;
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Login, {{"status", "success"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Login, {{"status", "success"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
         } else {
             qDebug() << "Login failed for" << nickname << ":" << loginResult;
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Login, {{"status", "failed"}, {"reason", loginResult}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Login, {{"status", "failed"}, {"reason", loginResult}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
         }
         break;
     }
     case MessageType::Message:
         if (!clientInfo->isLoggedIn) {
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             return;
         }
         {
@@ -122,9 +248,14 @@ void Server::handleClientData() {
             privateMsg["from"] = clientInfo->nickname;
             privateMsg["content"] = content;
             QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, privateMsg)).toJson();
+
+            // 在主线程中发送消息给目标用户
+            QMutexLocker locker(&m_clientsMutex);
             for (ClientInfo &c : clients) {
                 if (c.isLoggedIn && c.nickname == to) {
-                    c.socket->write(message);
+                    QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                             Q_ARG(QTcpSocket*, c.socket), Q_ARG(QByteArray, message));
+                    break;
                 }
             }
         }
@@ -134,29 +265,41 @@ void Server::handleClientData() {
             QString query = msgData["query"].toString();
             QString nickname = searchUser(query);
             if (!nickname.isEmpty()) {
-                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::SearchUser, {{"status", "success"}, {"nickname", nickname}})).toJson());
+                QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::SearchUser, {{"status", "success"}, {"nickname", nickname}})).toJson();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             } else {
-                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::SearchUser, {{"status", "failed"}})).toJson());
+                QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::SearchUser, {{"status", "failed"}})).toJson();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             }
         }
         break;
     case MessageType::AddFriend:
         if (!clientInfo->isLoggedIn) {
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             return;
         }
         {
             QString friendName = msgData["friend"].toString();
             if (addFriend(clientInfo->nickname, friendName)) {
-                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::AddFriend, {{"status", "success"}})).toJson());
+                QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::AddFriend, {{"status", "success"}})).toJson();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             } else {
-                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::AddFriend, {{"status", "failed"}, {"reason", "Friend not found or already added"}})).toJson());
+                QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::AddFriend, {{"status", "failed"}, {"reason", "Friend not found or already added"}})).toJson();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             }
         }
         break;
     case MessageType::FriendList:
         if (!clientInfo->isLoggedIn) {
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             return;
         }
         {
@@ -168,12 +311,16 @@ void Server::handleClientData() {
             QJsonObject response;
             response["status"] = "success";
             response["friends"] = friendArray;
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::FriendList, response)).toJson());
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(MessageType::FriendList, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
         }
         break;
     case MessageType::ChatHistory:
         if (!clientInfo->isLoggedIn) {
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             return;
         }
         {
@@ -181,27 +328,37 @@ void Server::handleClientData() {
             QJsonObject response;
             response["status"] = "success";
             response["messages"] = getChatHistory(clientInfo->nickname, friendName);
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::ChatHistory, response)).toJson());
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(MessageType::ChatHistory, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
         }
         break;
     case MessageType::Logout:
         if (!clientInfo->isLoggedIn) {
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Not logged in"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Not logged in"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             return;
         }
         handleLogout(clientInfo);
         break;
     case MessageType::FriendRequest:
         if (!clientInfo->isLoggedIn) {
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             return;
         }
         {
             QString to = msgData["to"].toString();
             if (sendFriendRequest(clientInfo->nickname, to)) {
-                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::FriendRequest, {{"status", "success"}})).toJson());
+                QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::FriendRequest, {{"status", "success"}})).toJson();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             } else {
-                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::FriendRequest, {{"status", "failed"}, {"reason", "Request already sent or users are already friends"}})).toJson());
+                QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::FriendRequest, {{"status", "failed"}, {"reason", "Request already sent or users are already friends"}})).toJson();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             }
         }
         break;
@@ -209,8 +366,9 @@ void Server::handleClientData() {
         qDebug() << "收到接受好友请求消息: " << MessageProtocol::messageTypeToString(type) << " - " << msgData;
         if (!clientInfo->isLoggedIn) {
             qDebug() << "未登录用户尝试接受好友请求";
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson());
-            clientSocket->flush();
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             return;
         }
         {
@@ -218,19 +376,19 @@ void Server::handleClientData() {
             qDebug() << "处理接受好友请求：" << from << "到" << clientInfo->nickname;
             if (acceptFriendRequest(from, clientInfo->nickname)) {
                 qDebug() << "接受好友请求成功，发送响应";
-                
+
                 // 发送成功响应给接受者
                 QJsonObject accepterResponse;
                 accepterResponse["status"] = "success";
                 QByteArray accepterMsg = QJsonDocument(MessageProtocol::createMessage(
                     MessageType::AcceptFriend, accepterResponse)).toJson();
-                clientSocket->write(accepterMsg);
-                clientSocket->flush();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, accepterMsg));
                 qDebug() << "已发送响应给接受者：" << accepterMsg;
-                
+
                 // 等待一小段时间确保消息被处理
                 QThread::msleep(50);
-                
+
                 // 刷新接受者的好友列表
                 QStringList accepterFriends = getFriendList(clientInfo->nickname);
                 QJsonArray accepterFriendArray;
@@ -242,13 +400,13 @@ void Server::handleClientData() {
                 friendsResponse["friends"] = accepterFriendArray;
                 QByteArray friendsMsg = QJsonDocument(MessageProtocol::createMessage(
                     MessageType::FriendList, friendsResponse)).toJson();
-                clientSocket->write(friendsMsg);
-                clientSocket->flush();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, friendsMsg));
                 qDebug() << "已发送好友列表给接受者：" << friendsResponse;
-                
+
                 // 等待一小段时间确保消息被处理
                 QThread::msleep(50);
-                
+
                 // 刷新接受者的好友请求列表
                 QStringList requests = getFriendRequests(clientInfo->nickname);
                 QJsonArray requestArray;
@@ -260,29 +418,29 @@ void Server::handleClientData() {
                 refreshRequestsResponse["requests"] = requestArray;
                 QByteArray refreshRequestsMsg = QJsonDocument(MessageProtocol::createMessage(
                     MessageType::FriendRequestList, refreshRequestsResponse)).toJson();
-                clientSocket->write(refreshRequestsMsg);
-                clientSocket->flush();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, refreshRequestsMsg));
                 qDebug() << "已发送好友请求列表给接受者：" << refreshRequestsResponse;
-                
+
                 // 通知发送请求的用户
                 bool notified = false;
                 for (const ClientInfo &client : clients) {
                     if (client.isLoggedIn && client.nickname == from) {
                         qDebug() << "找到请求发送者" << from << "，发送通知";
-                        
+
                         // 发送接受通知
                         QJsonObject senderResponse;
                         senderResponse["status"] = "success";
                         senderResponse["friend"] = clientInfo->nickname;
                         QByteArray senderMsg = QJsonDocument(MessageProtocol::createMessage(
                             MessageType::AcceptFriend, senderResponse)).toJson();
-                        client.socket->write(senderMsg);
-                        client.socket->flush();
+                        QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                                 Q_ARG(QTcpSocket*, client.socket), Q_ARG(QByteArray, senderMsg));
                         qDebug() << "已发送通知给请求发送者：" << senderMsg;
-                        
+
                         // 等待一小段时间确保消息被处理
                         QThread::msleep(100);
-                        
+
                         // 刷新发送者的好友列表
                         QStringList senderFriends = getFriendList(from);
                         QJsonArray senderFriendArray;
@@ -294,10 +452,10 @@ void Server::handleClientData() {
                         senderFriendsResponse["friends"] = senderFriendArray;
                         QByteArray senderFriendsMsg = QJsonDocument(MessageProtocol::createMessage(
                             MessageType::FriendList, senderFriendsResponse)).toJson();
-                        client.socket->write(senderFriendsMsg);
-                        client.socket->flush();
+                        QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                                 Q_ARG(QTcpSocket*, client.socket), Q_ARG(QByteArray, senderFriendsMsg));
                         qDebug() << "已发送好友列表给请求发送者：" << senderFriendsResponse;
-                        
+
                         notified = true;
                         break;
                     }
@@ -312,37 +470,49 @@ void Server::handleClientData() {
                 errorResponse["reason"] = "Request not found or already processed";
                 QByteArray errorMsg = QJsonDocument(MessageProtocol::createMessage(
                     MessageType::AcceptFriend, errorResponse)).toJson();
-                clientSocket->write(errorMsg);
-                clientSocket->flush();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, errorMsg));
                 qDebug() << "已发送错误响应：" << errorMsg;
             }
         }
         break;
     case MessageType::DeleteFriend:
         if (!clientInfo->isLoggedIn) {
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             return;
         }
         {
             QString friendName = msgData["friend"].toString();
             if (deleteFriend(clientInfo->nickname, friendName)) {
-                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::DeleteFriend, {{"status", "success"}})).toJson());
+                QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::DeleteFriend, {{"status", "success"}})).toJson();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
+
                 // 通知被删除的好友
+                QMutexLocker locker(&m_clientsMutex);
                 for (const ClientInfo &client : clients) {
                     if (client.isLoggedIn && client.nickname == friendName) {
-                        client.socket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::DeleteFriend, {{"status", "success"}, {"friend", clientInfo->nickname}})).toJson());
+                        QByteArray notifyMsg = QJsonDocument(MessageProtocol::createMessage(MessageType::DeleteFriend, {{"status", "success"}, {"friend", clientInfo->nickname}})).toJson();
+                        QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                                 Q_ARG(QTcpSocket*, client.socket), Q_ARG(QByteArray, notifyMsg));
                         break;
                     }
                 }
             } else {
-                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::DeleteFriend, {{"status", "failed"}, {"reason", "Friend not found"}})).toJson());
+                QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::DeleteFriend, {{"status", "failed"}, {"reason", "Friend not found"}})).toJson();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             }
         }
         break;
     case MessageType::FriendRequestList:
         if (!clientInfo->isLoggedIn) {
             qDebug() << "未登录用户尝试获取好友请求列表";
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             return;
         }
         {
@@ -357,8 +527,8 @@ void Server::handleClientData() {
             response["requests"] = requestArray;
             QByteArray responseMsg = QJsonDocument(MessageProtocol::createMessage(MessageType::FriendRequestList, response)).toJson();
             qDebug() << "发送好友请求列表响应：" << response;
-            clientSocket->write(responseMsg);
-            clientSocket->flush();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseMsg));
         }
         break;
     case MessageType::DeleteFriendRequest: {
@@ -370,12 +540,12 @@ void Server::handleClientData() {
             errorResponse["reason"] = "请先登录";
             QByteArray errorMsg = QJsonDocument(MessageProtocol::createMessage(
                 MessageType::DeleteFriendRequest, errorResponse)).toJson();
-            clientInfo->socket->write(errorMsg);
-            clientInfo->socket->flush();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientInfo->socket), Q_ARG(QByteArray, errorMsg));
             qDebug() << "已发送错误响应：" << errorMsg;
             break;
         }
-        
+
         QString from = msgData["from"].toString();
         if (from.isEmpty()) {
             qDebug() << "无效的好友请求源用户";
@@ -384,12 +554,12 @@ void Server::handleClientData() {
             errorResponse["reason"] = "无效的好友请求";
             QByteArray errorMsg = QJsonDocument(MessageProtocol::createMessage(
                 MessageType::DeleteFriendRequest, errorResponse)).toJson();
-            clientInfo->socket->write(errorMsg);
-            clientInfo->socket->flush();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientInfo->socket), Q_ARG(QByteArray, errorMsg));
             qDebug() << "已发送错误响应：" << errorMsg;
             break;
         }
-        
+
         qDebug() << "处理删除好友请求，从" << from << "到" << clientInfo->nickname;
         if (deleteFriendRequest(from, clientInfo->nickname)) {
             // 发送成功响应
@@ -397,10 +567,10 @@ void Server::handleClientData() {
             response["status"] = "success";
             QByteArray responseMsg = QJsonDocument(MessageProtocol::createMessage(
                 MessageType::DeleteFriendRequest, response)).toJson();
-            clientInfo->socket->write(responseMsg);
-            clientInfo->socket->flush();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientInfo->socket), Q_ARG(QByteArray, responseMsg));
             qDebug() << "已发送删除好友请求成功响应：" << responseMsg;
-            
+
             // 刷新好友请求列表
             QStringList requests = getFriendRequests(clientInfo->nickname);
             QJsonArray requestArray;
@@ -412,8 +582,8 @@ void Server::handleClientData() {
             refreshResponse["requests"] = requestArray;
             QByteArray refreshMsg = QJsonDocument(MessageProtocol::createMessage(
                 MessageType::FriendRequestList, refreshResponse)).toJson();
-            clientInfo->socket->write(refreshMsg);
-            clientInfo->socket->flush();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientInfo->socket), Q_ARG(QByteArray, refreshMsg));
             qDebug() << "已发送刷新好友请求列表响应：" << refreshResponse;
         } else {
             // 发送失败响应
@@ -422,8 +592,8 @@ void Server::handleClientData() {
             errorResponse["reason"] = "删除好友请求失败";
             QByteArray errorMsg = QJsonDocument(MessageProtocol::createMessage(
                 MessageType::DeleteFriendRequest, errorResponse)).toJson();
-            clientInfo->socket->write(errorMsg);
-            clientInfo->socket->flush();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientInfo->socket), Q_ARG(QByteArray, errorMsg));
             qDebug() << "已发送错误响应：" << errorMsg;
         }
         break;
@@ -437,35 +607,41 @@ void Server::handleClientData() {
             QString groupName = msgData["group_name"].toString();
             QJsonArray membersArray = msgData["members"].toArray();
             QStringList members;
-            
+
             // 将JSON数组转换为字符串列表
             for (const QJsonValue &value : membersArray) {
                 members << value.toString();
             }
-            
+
             // 确保创建者也在群聊中
             if (!members.contains(clientInfo->nickname)) {
                 members << clientInfo->nickname;
             }
-            
+
             qDebug() << "创建群聊请求：" << groupName << "，成员：" << members.join(", ");
-            
+
             if (createGroup(clientInfo->nickname, groupName, members)) {
                 QJsonObject response;
                 response["status"] = "success";
                 response["group_name"] = groupName;
-                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::CreateGroup, response)).toJson());
+                QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(MessageType::CreateGroup, response)).toJson();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
             } else {
                 QJsonObject response;
                 response["status"] = "failed";
                 response["reason"] = "创建群聊失败";
-                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::CreateGroup, response)).toJson());
+                QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(MessageType::CreateGroup, response)).toJson();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
             }
         }
         break;
     case MessageType::GroupList:
         if (!clientInfo->isLoggedIn) {
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             return;
         }
         {
@@ -477,12 +653,22 @@ void Server::handleClientData() {
             QJsonObject response;
             response["status"] = "success";
             response["groups"] = groupArray;
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::GroupList, response)).toJson());
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(MessageType::GroupList, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
+
+            // 打印调试信息
+            qDebug() << "发送群聊列表给用户" << clientInfo->nickname << "，群聊数量：" << groups.size();
+            for (const QString &g : groups) {
+                qDebug() << "  群聊：" << g;
+            }
         }
         break;
     case MessageType::GroupMembers:
         if (!clientInfo->isLoggedIn) {
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             return;
         }
         {
@@ -496,38 +682,48 @@ void Server::handleClientData() {
             response["status"] = "success";
             response["group_id"] = groupId;
             response["members"] = memberArray;
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::GroupMembers, response)).toJson());
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(MessageType::GroupMembers, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
         }
         break;
     case MessageType::GroupChat:
         if (!clientInfo->isLoggedIn) {
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             return;
         }
         {
             int groupId = msgData["group_id"].toInt();
             QString content = msgData["content"].toString();
-            
+
             // 保存消息到数据库
             if (saveGroupChatMessage(groupId, clientInfo->nickname, content)) {
                 // 通知其他群成员
                 notifyGroupMessage(groupId, clientInfo->nickname, content);
-                
+
                 // 发送成功响应给发送者
                 QJsonObject response;
                 response["status"] = "success";
-                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::GroupChat, response)).toJson());
+                QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(MessageType::GroupChat, response)).toJson();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
             } else {
                 QJsonObject response;
                 response["status"] = "failed";
                 response["reason"] = "发送群消息失败";
-                clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::GroupChat, response)).toJson());
+                QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(MessageType::GroupChat, response)).toJson();
+                QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                         Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
             }
         }
         break;
     case MessageType::GroupChatHistory:
         if (!clientInfo->isLoggedIn) {
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson());
+            QByteArray response = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, {{"status", "failed"}, {"reason", "Please login first"}})).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, response));
             return;
         }
         {
@@ -537,7 +733,9 @@ void Server::handleClientData() {
             response["status"] = "success";
             response["group_id"] = groupId;
             response["messages"] = chatHistory;
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::GroupChatHistory, response)).toJson());
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(MessageType::GroupChatHistory, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
         }
         break;
     case MessageType::GetUserProfile: {
@@ -545,29 +743,35 @@ void Server::handleClientData() {
             QJsonObject response;
             response["status"] = "error";
             response["reason"] = "Not logged in";
-            
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(
-                MessageType::GetUserProfile, response)).toJson());
+
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::GetUserProfile, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
             return;
         }
-        
+
         QString nickname = msgData.value("nickname").toString();
         if (nickname.isEmpty()) {
             nickname = clientInfo->nickname; // 默认查询自己的资料
         }
-        
+
         QJsonObject userProfile = getUserProfile(nickname);
         if (!userProfile.isEmpty()) {
             userProfile["status"] = "success";
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(
-                MessageType::GetUserProfile, userProfile)).toJson());
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::GetUserProfile, userProfile)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
         } else {
             QJsonObject response;
             response["status"] = "error";
             response["reason"] = "User not found";
-            
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(
-                MessageType::GetUserProfile, response)).toJson());
+
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::GetUserProfile, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
         }
         break;
     }
@@ -576,38 +780,46 @@ void Server::handleClientData() {
             QJsonObject response;
             response["status"] = "error";
             response["reason"] = "Not logged in";
-            
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(
-                MessageType::UpdateUserProfile, response)).toJson());
+
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::UpdateUserProfile, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
             return;
         }
-        
+
         // 确保用户只能更新自己的资料
         QString nickname = msgData.value("nickname").toString();
         if (nickname != clientInfo->nickname) {
             QJsonObject response;
             response["status"] = "error";
             response["reason"] = "Cannot update profile of other users";
-            
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(
-                MessageType::UpdateUserProfile, response)).toJson());
+
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::UpdateUserProfile, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
             return;
         }
-        
+
         // 更新用户资料
         if (updateUserProfile(nickname, msgData)) {
             QJsonObject response;
             response["status"] = "success";
-            
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(
-                MessageType::UpdateUserProfile, response)).toJson());
+
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::UpdateUserProfile, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
         } else {
             QJsonObject response;
             response["status"] = "error";
             response["reason"] = "Failed to update profile";
-            
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(
-                MessageType::UpdateUserProfile, response)).toJson());
+
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::UpdateUserProfile, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
         }
         break;
     }
@@ -616,50 +828,60 @@ void Server::handleClientData() {
             QJsonObject response;
             response["status"] = "error";
             response["reason"] = "Not logged in";
-            
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(
-                MessageType::UploadAvatar, response)).toJson());
+
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::UploadAvatar, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
             return;
         }
-        
+
         // 确保用户只能更新自己的头像
         QString nickname = msgData.value("nickname").toString();
         if (nickname != clientInfo->nickname) {
             QJsonObject response;
             response["status"] = "error";
             response["reason"] = "Cannot upload avatar for other users";
-            
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(
-                MessageType::UploadAvatar, response)).toJson());
+
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::UploadAvatar, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
             return;
         }
-        
+
         // 获取Base64编码的头像数据
         QByteArray avatarData = QByteArray::fromBase64(msgData.value("avatar_data").toString().toLatin1());
         if (avatarData.isEmpty()) {
             QJsonObject response;
             response["status"] = "error";
             response["reason"] = "Invalid avatar data";
-            
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(
-                MessageType::UploadAvatar, response)).toJson());
+
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::UploadAvatar, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
             return;
         }
-        
+
         // 保存头像
         if (saveAvatar(nickname, avatarData)) {
             QJsonObject response;
             response["status"] = "success";
-            
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(
-                MessageType::UploadAvatar, response)).toJson());
+
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::UploadAvatar, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
         } else {
             QJsonObject response;
             response["status"] = "error";
             response["reason"] = "Failed to save avatar";
-            
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(
-                MessageType::UploadAvatar, response)).toJson());
+
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::UploadAvatar, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
         }
         break;
     }
@@ -669,28 +891,34 @@ void Server::handleClientData() {
             QJsonObject response;
             response["status"] = "error";
             response["reason"] = "No nickname specified";
-            
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(
-                MessageType::GetAvatar, response)).toJson());
+
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::GetAvatar, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
             return;
         }
-        
+
         QByteArray avatarData = getAvatar(nickname);
         if (!avatarData.isEmpty()) {
             QJsonObject response;
             response["status"] = "success";
             response["nickname"] = nickname;
             response["avatar_data"] = QString::fromLatin1(avatarData.toBase64());
-            
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(
-                MessageType::GetAvatar, response)).toJson());
+
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::GetAvatar, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
         } else {
             QJsonObject response;
             response["status"] = "error";
             response["reason"] = "Avatar not found";
-            
-            clientSocket->write(QJsonDocument(MessageProtocol::createMessage(
-                MessageType::GetAvatar, response)).toJson());
+
+            QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(
+                MessageType::GetAvatar, response)).toJson();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, clientSocket), Q_ARG(QByteArray, responseData));
         }
         break;
     }
@@ -704,15 +932,38 @@ void Server::handleClientDisconnection() {
     QTcpSocket *clientSocket = qobject_cast<QTcpSocket*>(sender());
     if (!clientSocket) return;
 
-    for (int i = 0; i < clients.size(); ++i) {
-        if (clients[i].socket == clientSocket) {
-            if (clients[i].isLoggedIn) {
-                handleLogout(&clients[i]);
+    // 使用互斥锁保护clients列表
+    {
+        QMutexLocker locker(&m_clientsMutex);
+        for (int i = 0; i < clients.size(); ++i) {
+            if (clients[i].socket == clientSocket) {
+                if (clients[i].isLoggedIn) {
+                    // 在锁内调用handleLogout可能会导致死锁，所以先保存信息
+                    QString nickname = clients[i].nickname;
+                    bool isLoggedIn = clients[i].isLoggedIn;
+
+                    // 先从列表中移除
+                    clients.removeAt(i);
+
+                    // 释放锁后再处理登出逻辑
+                    locker.unlock();
+
+                    if (isLoggedIn) {
+                        // 更新用户状态
+                        updateUserStatus(nickname, false);
+                        notifyFriendsStatusChange(nickname, false);
+                    }
+
+                    break;
+                } else {
+                    // 如果未登录，直接移除
+                    clients.removeAt(i);
+                    break;
+                }
             }
-            clients.removeAt(i);
-            break;
         }
     }
+
     clientSocket->deleteLater();
 }
 
@@ -721,19 +972,23 @@ void Server::handleLogout(ClientInfo *clientInfo) {
 
     updateUserStatus(clientInfo->nickname, false);
     notifyFriendsStatusChange(clientInfo->nickname, false);
-    
+
     // 发送登出成功消息给客户端
     QJsonObject response;
     response["status"] = "success";
-    clientInfo->socket->write(QJsonDocument(MessageProtocol::createMessage(MessageType::Logout, response)).toJson());
-    
+    QByteArray responseData = QJsonDocument(MessageProtocol::createMessage(MessageType::Logout, response)).toJson();
+    QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                             Q_ARG(QTcpSocket*, clientInfo->socket), Q_ARG(QByteArray, responseData));
+
     clientInfo->isLoggedIn = false;
     clientInfo->nickname.clear();
 }
 
 void Server::updateUserStatus(const QString &nickname, bool isOnline) {
-    QSqlQuery query(db);
-    
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     if (isOnline) {
         // 用户上线，只更新在线状态
         query.prepare("UPDATE users SET is_online = 1 WHERE nickname = ?");
@@ -745,7 +1000,7 @@ void Server::updateUserStatus(const QString &nickname, bool isOnline) {
         query.addBindValue(currentTime.toString(Qt::ISODate));
         query.addBindValue(nickname);
     }
-    
+
     if (!query.exec()) {
         qDebug() << "Error updating user status:" << query.lastError().text();
     }
@@ -758,10 +1013,12 @@ void Server::notifyFriendsStatusChange(const QString &nickname, bool isOnline) {
     statusMsg["isOnline"] = isOnline;
     statusMsg["nickname"] = nickname;  // 添加nickname字段，确保客户端能正确识别
     QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::FriendStatus, statusMsg)).toJson();
-    
+
+    QMutexLocker locker(&m_clientsMutex);
     for (const ClientInfo &client : clients) {
         if (client.isLoggedIn && friends.contains(client.nickname)) {
-            client.socket->write(message);
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, client.socket), Q_ARG(QByteArray, message));
         }
     }
 }
@@ -769,10 +1026,27 @@ void Server::notifyFriendsStatusChange(const QString &nickname, bool isOnline) {
 bool Server::initDatabase() {
     QString dbPath = QCoreApplication::applicationDirPath() + "/../users.db";
     qDebug() << "Database path:" << dbPath;
+
+    // 使用文件锁保护数据库文件
+    m_dbFileLock->open(dbPath);
+    if (!m_dbFileLock->lock(FileLock::WriteLock)) {
+        qDebug() << "Error: Failed to acquire database file lock";
+        return false;
+    }
+
+    // 使用信号量控制数据库访问
+    if (!m_dbSemaphore->wait()) {
+        qDebug() << "Error: Failed to acquire database semaphore";
+        m_dbFileLock->unlock();
+        return false;
+    }
+
     db = QSqlDatabase::addDatabase("QSQLITE");
     db.setDatabaseName(dbPath);
     if (!db.open()) {
         qDebug() << "Error: Failed to open database:" << db.lastError().text();
+        m_dbSemaphore->post();
+        m_dbFileLock->unlock();
         return false;
     }
 
@@ -854,7 +1128,7 @@ bool Server::initDatabase() {
         qDebug() << "Error: Failed to create friend_requests table:" << query.lastError().text();
         return false;
     }
-    
+
     // 创建群聊表
     QString createGroupsTable = R"(
         CREATE TABLE IF NOT EXISTS groups (
@@ -869,7 +1143,7 @@ bool Server::initDatabase() {
         qDebug() << "Error: Failed to create groups table:" << query.lastError().text();
         return false;
     }
-    
+
     // 创建群成员表
     QString createGroupMembersTable = R"(
         CREATE TABLE IF NOT EXISTS group_members (
@@ -885,7 +1159,7 @@ bool Server::initDatabase() {
         qDebug() << "Error: Failed to create group_members table:" << query.lastError().text();
         return false;
     }
-    
+
     // 创建群消息表
     QString createGroupMessagesTable = R"(
         CREATE TABLE IF NOT EXISTS group_messages (
@@ -902,20 +1176,20 @@ bool Server::initDatabase() {
         qDebug() << "Error: Failed to create group_messages table:" << query.lastError().text();
         return false;
     }
-    
+
     // 创建测试账号 (111-999)
     for (int i = 1; i <= 9; i++) {
         QString username = QString("%1%1%1").arg(i);
         QString email = QString("%1@test.com").arg(username);
         QString hashedPassword = hashPassword(username); // 密码与用户名相同
-        
+
         // 使用INSERT OR IGNORE确保不会因为记录已存在而报错
         QString insertSql = QString("INSERT OR IGNORE INTO users (email, nickname, password, is_online) "
                                    "VALUES ('%1', '%2', '%3', 0)")
                             .arg(email)
                             .arg(username)
                             .arg(hashedPassword);
-        
+
         if (query.exec(insertSql)) {
             // 检查是否真的插入了新记录
             if (query.numRowsAffected() > 0) {
@@ -925,7 +1199,11 @@ bool Server::initDatabase() {
             qDebug() << "创建测试账号失败:" << username << "- 错误:" << query.lastError().text();
         }
     }
-    
+
+    // 释放数据库信号量和文件锁
+    m_dbSemaphore->post();
+    m_dbFileLock->unlock();
+
     return true;
 }
 
@@ -943,10 +1221,10 @@ bool Server::registerUser(const QString &email, const QString &nickname, const Q
     if (!query.exec() || query.next()) {
         return false;
     }
-    
+
     // 使用当前时间作为注册时间
     QDateTime currentTime = QDateTime::currentDateTime();
-    
+
     query.prepare("INSERT INTO users (email, nickname, password, is_online, register_time, last_login_time) "
                   "VALUES (?, ?, ?, 0, ?, ?)");
     query.addBindValue(email);
@@ -958,7 +1236,10 @@ bool Server::registerUser(const QString &email, const QString &nickname, const Q
 }
 
 QString Server::loginUser(const QString &nickname, const QString &password, ClientInfo &client) {
-    QSqlQuery query(db);
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     query.prepare("SELECT password FROM users WHERE nickname = ?");
     query.addBindValue(nickname);
     if (!query.exec() || !query.next()) {
@@ -968,74 +1249,81 @@ QString Server::loginUser(const QString &nickname, const QString &password, Clie
     if (storedPassword == hashPassword(password)) {
         // 更新用户在线状态
         updateUserStatus(nickname, true);
-        
+
         // 更新最后登录时间
         QDateTime currentTime = QDateTime::currentDateTime();
-        QSqlQuery updateQuery(db);
+        QSqlQuery updateQuery(threadDb);
         updateQuery.prepare("UPDATE users SET last_login_time = ? WHERE nickname = ?");
         updateQuery.addBindValue(currentTime.toString(Qt::ISODate));
         updateQuery.addBindValue(nickname);
         if (!updateQuery.exec()) {
             qDebug() << "Error updating last login time:" << updateQuery.lastError().text();
         }
-        
+
         notifyFriendsStatusChange(nickname, true);
-        
+
         // 登录时检查是否有待处理的好友请求，但这里不发送给客户端
         // 客户端登录成功后会主动请求好友请求列表
         QStringList pendingRequests = getFriendRequests(nickname);
         if (!pendingRequests.isEmpty()) {
             qDebug() << "用户" << nickname << "登录成功，发现" << pendingRequests.size() << "个待处理的好友请求";
         }
-        
+
         return "success";
     }
     return "Invalid password";
 }
 
 bool Server::addFriend(const QString &user, const QString &friendName) {
-    QSqlQuery query;
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     query.prepare("SELECT nickname FROM users WHERE nickname = :friend");
     query.bindValue(":friend", friendName);
     if (!query.exec() || !query.next()) {
         return false;
     }
-    
+
     // 开始事务以确保数据一致性
-    db.transaction();
-    
+    threadDb.transaction();
+
     // 添加好友关系
     query.prepare("INSERT OR IGNORE INTO friends (user_nickname, friend_nickname) VALUES (:user, :friend)");
     query.bindValue(":user", user);
     query.bindValue(":friend", friendName);
     bool success = query.exec();
-    
+
     if (success && query.numRowsAffected() > 0) {
         // 更新用户的好友数量
         query.prepare("UPDATE users SET friend_count = friend_count + 1 WHERE nickname = :user");
         query.bindValue(":user", user);
         success = query.exec() && success;
-        
+
         // 更新好友的好友数量
         query.prepare("UPDATE users SET friend_count = friend_count + 1 WHERE nickname = :friend");
         query.bindValue(":friend", friendName);
         success = query.exec() && success;
     }
-    
+
     // 根据操作结果提交或回滚事务
     if (success) {
-        db.commit();
+        threadDb.commit();
     } else {
-        db.rollback();
+        threadDb.rollback();
         qDebug() << "添加好友失败:" << query.lastError().text();
     }
-    
+
     return success;
 }
 
 QStringList Server::getFriendList(const QString &user) {
     QStringList friends;
-    QSqlQuery query;
+
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     query.prepare("SELECT friend_nickname FROM friends WHERE user_nickname = :user");
     query.bindValue(":user", user);
     if (query.exec()) {
@@ -1047,16 +1335,66 @@ QStringList Server::getFriendList(const QString &user) {
 }
 
 bool Server::saveChatMessage(const QString &from, const QString &to, const QString &content) {
+    // 使用写锁保护聊天历史的写入
+    WriteLocker locker(m_chatHistoryLock);
+    if (!locker.isLocked()) {
+        qDebug() << "Failed to acquire write lock for chat history";
+        return false;
+    }
+
+    // 使用数据库信号量控制数据库访问
+    if (!m_dbSemaphore->wait()) {
+        qDebug() << "Failed to acquire database semaphore";
+        return false;
+    }
+
     QSqlQuery query;
     query.prepare("INSERT INTO messages (from_nickname, to_nickname, content) VALUES (:from, :to, :content)");
     query.bindValue(":from", from);
     query.bindValue(":to", to);
     query.bindValue(":content", content);
-    return query.exec();
+    bool result = query.exec();
+
+    // 释放数据库信号量
+    m_dbSemaphore->post();
+
+    // 将消息添加到共享内存，以便其他进程可以访问
+    if (result) {
+        QJsonObject msgObj;
+        msgObj["from"] = from;
+        msgObj["to"] = to;
+        msgObj["content"] = content;
+        msgObj["timestamp"] = QDateTime::currentDateTime().toString(Qt::ISODate);
+
+        QJsonDocument doc(msgObj);
+        QByteArray jsonData = doc.toJson(QJsonDocument::Compact);
+
+        // 写入共享内存
+        m_sharedMemory->write(jsonData);
+
+        // 将消息添加到消息队列，以便其他线程可以处理
+        m_messageQueue->enqueue(jsonData);
+    }
+
+    return result;
 }
 
 QJsonArray Server::getChatHistory(const QString &user1, const QString &user2) {
     QJsonArray messages;
+
+    // 使用读写锁保护聊天历史的读取
+    ReadLocker locker(m_chatHistoryLock);
+    if (!locker.isLocked()) {
+        qDebug() << "Failed to acquire read lock for chat history";
+        return messages;
+    }
+
+    // 使用数据库信号量控制数据库访问
+    if (!m_dbSemaphore->wait()) {
+        qDebug() << "Failed to acquire database semaphore";
+        return messages;
+    }
+
     QSqlQuery query;
     query.prepare("SELECT from_nickname, content FROM messages WHERE (from_nickname = :user1 AND to_nickname = :user2) OR (from_nickname = :user2 AND to_nickname = :user1) ORDER BY timestamp");
     query.bindValue(":user1", user1);
@@ -1069,6 +1407,10 @@ QJsonArray Server::getChatHistory(const QString &user1, const QString &user2) {
             messages.append(msg);
         }
     }
+
+    // 释放数据库信号量
+    m_dbSemaphore->post();
+
     return messages;
 }
 
@@ -1084,9 +1426,12 @@ QString Server::searchUser(const QString &query) {
 }
 
 bool Server::sendFriendRequest(const QString &from, const QString &to) {
-    QSqlQuery query(db);
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     qDebug() << "处理来自" << from << "向" << to << "发送的好友请求";
-    
+
     // 检查是否已经是好友
     query.prepare("SELECT 1 FROM friends WHERE (user_nickname = ? AND friend_nickname = ?) OR (user_nickname = ? AND friend_nickname = ?)");
     query.addBindValue(from);
@@ -1097,7 +1442,7 @@ bool Server::sendFriendRequest(const QString &from, const QString &to) {
         qDebug() << "已经是好友关系，无需发送请求";
         return false; // 已经是好友
     }
-    
+
     // 检查是否已经有待处理的请求
     query.prepare("SELECT 1 FROM friend_requests WHERE from_nickname = ? AND to_nickname = ? AND status = 'pending'");
     query.addBindValue(from);
@@ -1106,18 +1451,18 @@ bool Server::sendFriendRequest(const QString &from, const QString &to) {
         qDebug() << "已经存在待处理的请求";
         return false; // 已经有待处理的请求
     }
-    
+
     // 添加好友请求
     query.prepare("INSERT INTO friend_requests (from_nickname, to_nickname, status) VALUES (?, ?, 'pending')");
     query.addBindValue(from);
     query.addBindValue(to);
     if (query.exec()) {
         qDebug() << "好友请求已添加到数据库";
-        
+
         // 尝试立即通知对方（如果在线）
         bool notified = notifyFriendRequest(to, from);
         qDebug() << "通知状态：" << (notified ? "已通知" : "未通知（对方可能不在线）");
-        
+
         return true;
     } else {
         qDebug() << "添加好友请求失败：" << query.lastError().text();
@@ -1126,9 +1471,12 @@ bool Server::sendFriendRequest(const QString &from, const QString &to) {
 }
 
 bool Server::acceptFriendRequest(const QString &from, const QString &to) {
-    QSqlQuery query(db);
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     qDebug() << "处理接受好友请求函数：" << from << "->" << to;
-    
+
     // 检查请求是否存在
     query.prepare("SELECT 1 FROM friend_requests WHERE from_nickname = ? AND to_nickname = ? AND status = 'pending'");
     query.addBindValue(from);
@@ -1141,24 +1489,24 @@ bool Server::acceptFriendRequest(const QString &from, const QString &to) {
         qDebug() << "未找到待处理的好友请求";
         return false;
     }
-    
+
     // 开始事务
     qDebug() << "开始数据库事务";
-    if (!db.transaction()) {
-        qDebug() << "开始事务失败：" << db.lastError().text();
+    if (!threadDb.transaction()) {
+        qDebug() << "开始事务失败：" << threadDb.lastError().text();
         return false;
     }
-    
+
     // 删除好友请求（不再是更新状态，而是直接删除）
     query.prepare("DELETE FROM friend_requests WHERE from_nickname = ? AND to_nickname = ?");
     query.addBindValue(from);
     query.addBindValue(to);
     if (!query.exec()) {
         qDebug() << "删除好友请求失败：" << query.lastError().text();
-        db.rollback();
+        threadDb.rollback();
         return false;
     }
-    
+
     // 添加好友关系（双向）
     query.prepare("INSERT INTO friends (user_nickname, friend_nickname) VALUES (?, ?), (?, ?)");
     query.addBindValue(from);
@@ -1167,23 +1515,26 @@ bool Server::acceptFriendRequest(const QString &from, const QString &to) {
     query.addBindValue(from);
     if (!query.exec()) {
         qDebug() << "添加好友关系失败：" << query.lastError().text();
-        db.rollback();
+        threadDb.rollback();
         return false;
     }
-    
+
     qDebug() << "提交事务";
-    if (!db.commit()) {
-        qDebug() << "提交事务失败：" << db.lastError().text();
-        db.rollback();
+    if (!threadDb.commit()) {
+        qDebug() << "提交事务失败：" << threadDb.lastError().text();
+        threadDb.rollback();
         return false;
     }
-    
+
     qDebug() << "成功处理好友请求：" << from << "和" << to << "已成为好友";
     return true;
 }
 
 bool Server::deleteFriend(const QString &user, const QString &friendName) {
-    QSqlQuery query(db);
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     query.prepare("DELETE FROM friends WHERE (user_nickname = ? AND friend_nickname = ?) OR (user_nickname = ? AND friend_nickname = ?)");
     query.addBindValue(user);
     query.addBindValue(friendName);
@@ -1194,7 +1545,11 @@ bool Server::deleteFriend(const QString &user, const QString &friendName) {
 
 QStringList Server::getFriendRequests(const QString &user) {
     QStringList requests;
-    QSqlQuery query(db);
+
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     qDebug() << "获取用户" << user << "的好友请求列表";
     query.prepare("SELECT from_nickname FROM friend_requests WHERE to_nickname = ? AND status = 'pending'");
     query.addBindValue(user);
@@ -1215,25 +1570,29 @@ bool Server::notifyFriendRequest(const QString &to, const QString &from) {
     QJsonObject notification;
     notification["from"] = from;
     QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::FriendRequest, notification)).toJson();
-    
+
     // 遍历所有客户端，找到目标用户并发送通知
     bool notified = false;
+    QMutexLocker locker(&m_clientsMutex);
     for (auto it = clients.begin(); it != clients.end(); ++it) {
         if (it->isLoggedIn && it->nickname == to) {
             qDebug() << "Sending friend request notification from" << from << "to" << to;
-            it->socket->write(message);
-            it->socket->flush(); // 确保消息立即发送
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, it->socket), Q_ARG(QByteArray, message));
             notified = true;
             break;
         }
     }
-    
+
     return notified; // 返回是否成功通知对方
 }
 
 bool Server::deleteFriendRequest(const QString &from, const QString &to)
 {
-    QSqlQuery query(db);
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     query.prepare("DELETE FROM friend_requests WHERE from_nickname = ? AND to_nickname = ?");
     query.addBindValue(from);
     query.addBindValue(to);
@@ -1246,89 +1605,95 @@ bool Server::deleteFriendRequest(const QString &from, const QString &to)
 }
 
 bool Server::createGroup(const QString &creator, const QString &groupName, const QStringList &members) {
-    QSqlQuery query(db);
-    
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     // 开始事务
-    if (!db.transaction()) {
-        qDebug() << "创建群聊事务开始失败：" << db.lastError().text();
+    if (!threadDb.transaction()) {
+        qDebug() << "创建群聊事务开始失败：" << threadDb.lastError().text();
         return false;
     }
-    
+
     // 创建群聊
     query.prepare("INSERT INTO groups (name, creator_nickname) VALUES (?, ?)");
     query.addBindValue(groupName);
     query.addBindValue(creator);
-    
+
     if (!query.exec()) {
         qDebug() << "创建群聊失败：" << query.lastError().text();
-        db.rollback();
+        threadDb.rollback();
         return false;
     }
-    
+
     // 获取新创建的群聊ID
     int groupId = query.lastInsertId().toInt();
     if (groupId <= 0) {
         qDebug() << "获取群聊ID失败";
-        db.rollback();
+        threadDb.rollback();
         return false;
     }
-    
+
     // 添加创建者为群成员
     query.prepare("INSERT INTO group_members (group_id, member_nickname) VALUES (?, ?)");
     query.addBindValue(groupId);
     query.addBindValue(creator);
-    
+
     if (!query.exec()) {
         qDebug() << "添加创建者到群成员失败：" << query.lastError().text();
-        db.rollback();
+        threadDb.rollback();
         return false;
     }
-    
+
     // 添加其他成员
     bool allMembersAdded = true;
     for (const QString &member : members) {
         // 跳过创建者（已添加）
         if (member == creator) continue;
-        
+
         query.prepare("INSERT INTO group_members (group_id, member_nickname) VALUES (?, ?)");
         query.addBindValue(groupId);
         query.addBindValue(member);
-        
+
         if (!query.exec()) {
             qDebug() << "添加成员" << member << "到群聊失败：" << query.lastError().text();
             allMembersAdded = false;
             break;
         }
-        
+
         // 通知在线成员已被加入群聊
         notifyGroupCreation(member, groupId, groupName, creator);
     }
-    
+
     if (!allMembersAdded) {
         qDebug() << "添加群成员失败，回滚事务";
-        db.rollback();
+        threadDb.rollback();
         return false;
     }
-    
+
     // 提交事务
-    if (!db.commit()) {
-        qDebug() << "创建群聊提交事务失败：" << db.lastError().text();
-        db.rollback();
+    if (!threadDb.commit()) {
+        qDebug() << "创建群聊提交事务失败：" << threadDb.lastError().text();
+        threadDb.rollback();
         return false;
     }
-    
+
     qDebug() << "成功创建群聊：" << groupName << "，ID：" << groupId << "，创建者：" << creator;
     return true;
 }
 
 QStringList Server::getGroupList(const QString &user) {
     QStringList groups;
-    QSqlQuery query(db);
+
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     query.prepare("SELECT g.id, g.name FROM groups g "
                  "JOIN group_members gm ON g.id = gm.group_id "
                  "WHERE gm.member_nickname = ?");
     query.addBindValue(user);
-    
+
     if (query.exec()) {
         while (query.next()) {
             QString groupInfo = QString("%1:%2").arg(query.value("id").toString(), query.value("name").toString());
@@ -1337,16 +1702,20 @@ QStringList Server::getGroupList(const QString &user) {
     } else {
         qDebug() << "获取用户群聊列表失败：" << query.lastError().text();
     }
-    
+
     return groups;
 }
 
 QStringList Server::getGroupMembers(int groupId) {
     QStringList members;
-    QSqlQuery query(db);
+
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     query.prepare("SELECT member_nickname FROM group_members WHERE group_id = ?");
     query.addBindValue(groupId);
-    
+
     if (query.exec()) {
         while (query.next()) {
             members << query.value("member_nickname").toString();
@@ -1354,32 +1723,39 @@ QStringList Server::getGroupMembers(int groupId) {
     } else {
         qDebug() << "获取群成员列表失败：" << query.lastError().text();
     }
-    
+
     return members;
 }
 
 bool Server::saveGroupChatMessage(int groupId, const QString &from, const QString &content) {
-    QSqlQuery query(db);
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     query.prepare("INSERT INTO group_messages (group_id, from_nickname, content) VALUES (?, ?, ?)");
     query.addBindValue(groupId);
     query.addBindValue(from);
     query.addBindValue(content);
-    
+
     if (!query.exec()) {
         qDebug() << "保存群聊消息失败：" << query.lastError().text();
         return false;
     }
-    
+
     return true;
 }
 
 QJsonArray Server::getGroupChatHistory(int groupId) {
     QJsonArray messages;
-    QSqlQuery query(db);
+
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     query.prepare("SELECT from_nickname, content, timestamp FROM group_messages "
                  "WHERE group_id = ? ORDER BY timestamp");
     query.addBindValue(groupId);
-    
+
     if (query.exec()) {
         while (query.next()) {
             QJsonObject msg;
@@ -1391,7 +1767,7 @@ QJsonArray Server::getGroupChatHistory(int groupId) {
     } else {
         qDebug() << "获取群聊历史记录失败：" << query.lastError().text();
     }
-    
+
     return messages;
 }
 
@@ -1399,58 +1775,64 @@ bool Server::notifyGroupMessage(int groupId, const QString &from, const QString 
     // 获取群成员
     QStringList members = getGroupMembers(groupId);
     bool anyNotified = false;
-    
+
     QJsonObject msgData;
     msgData["group_id"] = groupId;
     msgData["from"] = from;
     msgData["content"] = content;
-    
+
     QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::GroupChat, msgData)).toJson();
-    
+
     // 遍历所有在线客户端，发送消息给在线群成员
+    QMutexLocker locker(&m_clientsMutex);
     for (const ClientInfo &client : clients) {
         if (client.isLoggedIn && members.contains(client.nickname) && client.nickname != from) {
-            client.socket->write(message);
-            client.socket->flush();
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, client.socket), Q_ARG(QByteArray, message));
             anyNotified = true;
         }
     }
-    
+
     return anyNotified;
 }
 
 bool Server::notifyGroupCreation(const QString &member, int groupId, const QString &groupName, const QString &creator) {
     // 查找在线的群成员
     bool notified = false;
-    
+
+    QMutexLocker locker(&m_clientsMutex);
     for (const ClientInfo &client : clients) {
         if (client.isLoggedIn && client.nickname == member) {
             QJsonObject notification;
             notification["group_id"] = groupId;
             notification["group_name"] = groupName;
             notification["creator"] = creator;
-            
+
             QByteArray message = QJsonDocument(MessageProtocol::createMessage(
                 MessageType::CreateGroup, notification)).toJson();
-            
-            client.socket->write(message);
-            client.socket->flush();
+
+            QMetaObject::invokeMethod(this, "sendResponseToClient", Qt::QueuedConnection,
+                                     Q_ARG(QTcpSocket*, client.socket), Q_ARG(QByteArray, message));
             qDebug() << "已通知用户" << member << "被加入群聊" << groupName;
             notified = true;
         }
     }
-    
+
     return notified;
 }
 
 QJsonObject Server::getUserProfile(const QString &nickname) {
     QJsonObject profile;
-    QSqlQuery query(db);
+
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     query.prepare("SELECT email, nickname, signature, avatar, gender, birthday, location, phone, "
                  "register_time, last_login_time, friend_count, group_count "
                  "FROM users WHERE nickname = ?");
     query.addBindValue(nickname);
-    
+
     if (query.exec() && query.next()) {
         profile["email"] = query.value("email").toString();
         profile["nickname"] = query.value("nickname").toString();
@@ -1467,64 +1849,66 @@ QJsonObject Server::getUserProfile(const QString &nickname) {
     } else {
         qDebug() << "获取用户资料失败：" << query.lastError().text();
     }
-    
+
     return profile;
 }
 
 bool Server::updateUserProfile(const QString &nickname, const QJsonObject &profileData) {
-    QSqlQuery query(db);
-    
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     // 构建更新语句
     QString updateQuery = "UPDATE users SET ";
     QStringList updateFields;
     QVariantList values;
-    
+
     // 检查并添加各个字段
     if (profileData.contains("signature")) {
         updateFields << "signature = ?";
         values << profileData["signature"].toString();
     }
-    
+
     if (profileData.contains("gender")) {
         updateFields << "gender = ?";
         values << profileData["gender"].toString();
     }
-    
+
     if (profileData.contains("birthday")) {
         updateFields << "birthday = ?";
         values << profileData["birthday"].toString();
     }
-    
+
     if (profileData.contains("location")) {
         updateFields << "location = ?";
         values << profileData["location"].toString();
     }
-    
+
     if (profileData.contains("phone")) {
         updateFields << "phone = ?";
         values << profileData["phone"].toString();
     }
-    
+
     // 如果没有要更新的字段，直接返回成功
     if (updateFields.isEmpty()) {
         return true;
     }
-    
+
     // 完成更新语句
     updateQuery += updateFields.join(", ") + " WHERE nickname = ?";
     values << nickname;
-    
+
     // 准备并执行查询
     query.prepare(updateQuery);
     for (const QVariant &value : values) {
         query.addBindValue(value);
     }
-    
+
     if (!query.exec()) {
         qDebug() << "更新用户资料失败：" << query.lastError().text();
         return false;
     }
-    
+
     return true;
 }
 
@@ -1535,57 +1919,63 @@ bool Server::saveAvatar(const QString &nickname, const QByteArray &avatarData) {
     if (!dir.exists()) {
         dir.mkpath(".");
     }
-    
+
     // 生成头像文件名（使用用户昵称作为文件名）
     QString avatarFileName = nickname + ".png";
     QString avatarPath = avatarDir + avatarFileName;
-    
+
     // 保存头像文件
     QFile file(avatarPath);
     if (!file.open(QIODevice::WriteOnly)) {
         qDebug() << "无法打开头像文件进行写入：" << file.errorString();
         return false;
     }
-    
+
     if (file.write(avatarData) == -1) {
         qDebug() << "写入头像文件失败：" << file.errorString();
         file.close();
         return false;
     }
-    
+
     file.close();
-    
+
     // 更新数据库中的头像路径
-    QSqlQuery query(db);
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     query.prepare("UPDATE users SET avatar = ? WHERE nickname = ?");
     query.addBindValue(avatarFileName);
     query.addBindValue(nickname);
-    
+
     if (!query.exec()) {
         qDebug() << "更新用户头像路径失败：" << query.lastError().text();
         return false;
     }
-    
+
     return true;
 }
 
 QByteArray Server::getAvatar(const QString &nickname) {
     // 首先从数据库获取头像文件名
-    QSqlQuery query(db);
+    // 获取线程本地数据库连接
+    QSqlDatabase threadDb = getThreadLocalDatabase();
+    QSqlQuery query(threadDb);
+
     query.prepare("SELECT avatar FROM users WHERE nickname = ?");
     query.addBindValue(nickname);
-    
+
     if (!query.exec() || !query.next()) {
         qDebug() << "获取用户头像信息失败：" << query.lastError().text();
         return QByteArray();
     }
-    
+
     QString avatarFileName = query.value("avatar").toString();
     if (avatarFileName.isEmpty()) {
         qDebug() << "用户" << nickname << "没有设置头像";
         return QByteArray();
     }
-    
+
     // 读取头像文件
     QString avatarPath = QCoreApplication::applicationDirPath() + "/../avatars/" + avatarFileName;
     QFile file(avatarPath);
@@ -1593,9 +1983,9 @@ QByteArray Server::getAvatar(const QString &nickname) {
         qDebug() << "无法打开头像文件：" << file.errorString();
         return QByteArray();
     }
-    
+
     QByteArray avatarData = file.readAll();
     file.close();
-    
+
     return avatarData;
 }

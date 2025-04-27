@@ -5,7 +5,15 @@
 #include <QTcpSocket>
 #include <QJsonObject>
 #include <QSqlDatabase>
+#include <QMutex>
 #include "../Common/messageprotocol.h"
+#include "threadpool.h"
+#include "semaphore.h"
+#include "filelock.h"
+#include "readwritelock.h"
+#include "threadmessagequeue.h"
+#include "sharedmemory.h"
+#include "processmanager.h"
 
 class Server : public QObject {
     Q_OBJECT
@@ -19,6 +27,16 @@ private slots:
     void handleClientData();
     void handleClientDisconnection();
 
+    // 在主线程中发送响应给客户端
+    void sendResponseToClient(QTcpSocket *clientSocket, const QByteArray &response);
+
+private:
+    // 处理客户端数据的线程函数
+    void processClientData(QTcpSocket *clientSocket, const QByteArray &data);
+
+    // 为当前线程创建数据库连接
+    QSqlDatabase getThreadLocalDatabase();
+
 private:
     struct ClientInfo {
         QTcpSocket *socket;
@@ -28,7 +46,29 @@ private:
 
     QTcpServer *tcpServer;
     QList<ClientInfo> clients;
+    QMutex m_clientsMutex;  // 保护clients列表的互斥锁
     QSqlDatabase db;
+
+    // 线程池
+    ThreadPool *m_threadPool;
+
+    // 数据库访问信号量
+    Semaphore *m_dbSemaphore;
+
+    // 数据库文件锁
+    FileLock *m_dbFileLock;
+
+    // 聊天历史读写锁
+    ReadWriteLock *m_chatHistoryLock;
+
+    // 消息队列
+    ThreadMessageQueue *m_messageQueue;
+
+    // 共享内存
+    SharedMemory *m_sharedMemory;
+
+    // 进程管理器
+    ProcessManager *m_processManager;
 
     bool initDatabase();
     QString hashPassword(const QString &password);
@@ -48,13 +88,13 @@ private:
     void notifyFriendsStatusChange(const QString &nickname, bool isOnline);
     bool notifyFriendRequest(const QString &to, const QString &from);
     bool deleteFriendRequest(const QString &from, const QString &to);
-    
+
     // 用户个人信息相关函数
     QJsonObject getUserProfile(const QString &nickname);
     bool updateUserProfile(const QString &nickname, const QJsonObject &profileData);
     bool saveAvatar(const QString &nickname, const QByteArray &avatarData);
     QByteArray getAvatar(const QString &nickname);
-    
+
     // 群聊相关函数
     bool createGroup(const QString &creator, const QString &groupName, const QStringList &members);
     QStringList getGroupList(const QString &user);
