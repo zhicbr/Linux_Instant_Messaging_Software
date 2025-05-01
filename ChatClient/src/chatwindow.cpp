@@ -980,15 +980,75 @@ void ChatWindow::handleServerData()
                     for (const QJsonValue &msgValue : messages) {
                         QJsonObject msgObj = msgValue.toObject();
                         QString sender = msgObj.value("from").toString();
-                        QString content = msgObj.value("content").toString();
-                        QString timestamp = QDateTime::currentDateTime().toString("hh:mm");
+                        QString contentStr = msgObj.value("content").toString();
+                        QString timestamp = QDateTime::fromString(msgObj.value("timestamp").toString(), Qt::ISODate).toString("hh:mm");
 
                         // 如果缓存中没有该用户的头像，则尝试获取
                         if (!m_avatarCache.contains(sender)) {
                             requestAvatar(sender);
                         }
 
-                        appendMessage(sender, content, timestamp);
+                        // 尝试解析JSON内容
+                        QJsonDocument contentDoc = QJsonDocument::fromJson(contentStr.toUtf8());
+
+                        if (!contentDoc.isNull() && contentDoc.isObject()) {
+                            // 如果是JSON对象，根据类型处理
+                            QJsonObject contentObj = contentDoc.object();
+                            QString type = contentObj["type"].toString();
+
+                            if (type == "image") {
+                                // 图片消息处理
+                                QString imageId = contentObj["imageId"].toString();
+
+                                // 检查是否有缓存
+                                if (m_imageCacheMap.contains(imageId)) {
+                                    QString cachedPath = m_imageCacheMap[imageId];
+                                    QFileInfo fileInfo(cachedPath);
+
+                                    if (fileInfo.exists() && fileInfo.isReadable()) {
+                                        // 文件存在且可读，获取图片尺寸
+                                        QImage image(cachedPath);
+                                        int width = image.width();
+                                        int height = image.height();
+
+                                        if (width > 0 && height > 0) {
+                                            // 图片有效，创建JSON对象
+                                            QJsonObject displayJson;
+                                            displayJson["type"] = "image";
+                                            displayJson["imageId"] = imageId;
+                                            displayJson["localPath"] = cachedPath;
+                                            displayJson["width"] = width;
+                                            displayJson["height"] = height;
+
+                                            // 显示图片消息
+                                            appendMessage(sender, QString::fromUtf8(QJsonDocument(displayJson).toJson()), timestamp);
+                                        } else {
+                                            // 图片无效，尝试从服务器下载
+                                            downloadImage(imageId);
+                                            appendMessage(sender, "[图片加载中...]", timestamp);
+                                        }
+                                    } else {
+                                        // 文件不存在或不可读，尝试从服务器下载
+                                        downloadImage(imageId);
+                                        appendMessage(sender, "[图片加载中...]", timestamp);
+                                    }
+                                } else {
+                                    // 没有缓存，尝试从服务器下载
+                                    downloadImage(imageId);
+                                    appendMessage(sender, "[图片加载中...]", timestamp);
+                                }
+                            } else if (type == "text") {
+                                // 文本消息
+                                QString text = contentObj["text"].toString();
+                                appendMessage(sender, text, timestamp);
+                            } else {
+                                // 未知类型，显示原始内容
+                                appendMessage(sender, contentStr, timestamp);
+                            }
+                        } else {
+                            // 如果不是JSON对象，当作普通文本处理
+                            appendMessage(sender, contentStr, timestamp);
+                        }
                     }
                 }
             } else {
@@ -1129,7 +1189,7 @@ void ChatWindow::handleServerData()
                     for (const QJsonValue &messageVal : messages) {
                         QJsonObject message = messageVal.toObject();
                         QString sender = message["from"].toString();
-                        QString content = message["content"].toString();
+                        QString contentStr = message["content"].toString();
                         QString timestamp = QDateTime::fromString(message["timestamp"].toString(), Qt::ISODate).toString("hh:mm");
 
                         // 如果缓存中没有该用户的头像，则尝试获取
@@ -1140,7 +1200,67 @@ void ChatWindow::handleServerData()
                         // 获取头像路径
                         QString avatarPath = getCachedAvatarPath(sender);
 
-                        emit groupChatMessageReceived(sender, content, timestamp, avatarPath);
+                        // 尝试解析JSON内容
+                        QJsonDocument contentDoc = QJsonDocument::fromJson(contentStr.toUtf8());
+
+                        if (!contentDoc.isNull() && contentDoc.isObject()) {
+                            // 如果是JSON对象，根据类型处理
+                            QJsonObject contentObj = contentDoc.object();
+                            QString type = contentObj["type"].toString();
+
+                            if (type == "image") {
+                                // 图片消息处理
+                                QString imageId = contentObj["imageId"].toString();
+
+                                // 检查是否有缓存
+                                if (m_imageCacheMap.contains(imageId)) {
+                                    QString cachedPath = m_imageCacheMap[imageId];
+                                    QFileInfo fileInfo(cachedPath);
+
+                                    if (fileInfo.exists() && fileInfo.isReadable()) {
+                                        // 文件存在且可读，获取图片尺寸
+                                        QImage image(cachedPath);
+                                        int width = image.width();
+                                        int height = image.height();
+
+                                        if (width > 0 && height > 0) {
+                                            // 图片有效，创建JSON对象
+                                            QJsonObject displayJson;
+                                            displayJson["type"] = "image";
+                                            displayJson["imageId"] = imageId;
+                                            displayJson["localPath"] = cachedPath;
+                                            displayJson["width"] = width;
+                                            displayJson["height"] = height;
+
+                                            // 显示图片消息
+                                            emit groupChatMessageReceived(sender, QString::fromUtf8(QJsonDocument(displayJson).toJson()), timestamp, avatarPath);
+                                        } else {
+                                            // 图片无效，尝试从服务器下载
+                                            downloadImage(imageId);
+                                            emit groupChatMessageReceived(sender, "[图片加载中...]", timestamp, avatarPath);
+                                        }
+                                    } else {
+                                        // 文件不存在或不可读，尝试从服务器下载
+                                        downloadImage(imageId);
+                                        emit groupChatMessageReceived(sender, "[图片加载中...]", timestamp, avatarPath);
+                                    }
+                                } else {
+                                    // 没有缓存，尝试从服务器下载
+                                    downloadImage(imageId);
+                                    emit groupChatMessageReceived(sender, "[图片加载中...]", timestamp, avatarPath);
+                                }
+                            } else if (type == "text") {
+                                // 文本消息
+                                QString text = contentObj["text"].toString();
+                                emit groupChatMessageReceived(sender, text, timestamp, avatarPath);
+                            } else {
+                                // 未知类型，显示原始内容
+                                emit groupChatMessageReceived(sender, contentStr, timestamp, avatarPath);
+                            }
+                        } else {
+                            // 如果不是JSON对象，当作普通文本处理
+                            emit groupChatMessageReceived(sender, contentStr, timestamp, avatarPath);
+                        }
                     }
                 }
             }

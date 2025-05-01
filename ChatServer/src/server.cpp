@@ -364,7 +364,7 @@ void Server::processClientData(QTcpSocket *clientSocket, const QByteArray &data)
                 QJsonObject textMsg;
                 textMsg["type"] = "text";
                 textMsg["text"] = content;
-                finalContent = QJsonDocument(textMsg).toJson(QJsonDocument::Compact);
+                finalContent = QString::fromUtf8(QJsonDocument(textMsg).toJson(QJsonDocument::Compact));
             } else {
                 // 已经是JSON格式，直接使用
                 finalContent = content;
@@ -372,10 +372,11 @@ void Server::processClientData(QTcpSocket *clientSocket, const QByteArray &data)
 
             // 保存消息到数据库
             QSqlQuery query(threadDb);
-            query.prepare("INSERT INTO messages (from_nickname, to_nickname, content) VALUES (?, ?, ?)");
+            query.prepare("INSERT INTO messages (from_nickname, to_nickname, content, timestamp) VALUES (?, ?, ?, ?)");
             query.addBindValue(clientInfo->nickname);
             query.addBindValue(to);
             query.addBindValue(finalContent);
+            query.addBindValue(QDateTime::currentDateTime().toString(Qt::ISODate));
 
             bool saveSuccess = query.exec();
             if (!saveSuccess) {
@@ -389,7 +390,9 @@ void Server::processClientData(QTcpSocket *clientSocket, const QByteArray &data)
             // 发送消息给目标用户
             QJsonObject privateMsg;
             privateMsg["from"] = clientInfo->nickname;
-            privateMsg["content"] = content;
+            privateMsg["to"] = to;
+            privateMsg["content"] = finalContent;
+            privateMsg["timestamp"] = QDateTime::currentDateTime().toString(Qt::ISODate);
             QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::Message, privateMsg)).toJson();
 
             // 在主线程中发送消息给目标用户
@@ -1744,17 +1747,18 @@ bool Server::saveChatMessage(const QString &from, const QString &to, const QStri
         QJsonObject textMsg;
         textMsg["type"] = "text";
         textMsg["text"] = content;
-        finalContent = QJsonDocument(textMsg).toJson(QJsonDocument::Compact);
+        finalContent = QString::fromUtf8(QJsonDocument(textMsg).toJson(QJsonDocument::Compact));
     } else {
         // 已经是JSON格式，直接使用
         finalContent = content;
     }
 
     QSqlQuery query;
-    query.prepare("INSERT INTO messages (from_nickname, to_nickname, content) VALUES (:from, :to, :content)");
+    query.prepare("INSERT INTO messages (from_nickname, to_nickname, content, timestamp) VALUES (:from, :to, :content, :timestamp)");
     query.bindValue(":from", from);
     query.bindValue(":to", to);
     query.bindValue(":content", finalContent);
+    query.bindValue(":timestamp", QDateTime::currentDateTime().toString(Qt::ISODate));
     bool result = query.exec();
 
     // 释放数据库信号量
@@ -1811,13 +1815,16 @@ QJsonArray Server::getChatHistory(const QString &user1, const QString &user2) {
     }
 
     QSqlQuery query(threadDb);
-    query.prepare("SELECT from_nickname, content, timestamp FROM messages WHERE (from_nickname = :user1 AND to_nickname = :user2) OR (from_nickname = :user2 AND to_nickname = :user1) ORDER BY timestamp");
+    query.prepare("SELECT from_nickname, to_nickname, content, timestamp FROM messages WHERE (from_nickname = :user1 AND to_nickname = :user2) OR (from_nickname = :user2 AND to_nickname = :user1) ORDER BY timestamp");
     query.bindValue(":user1", user1);
     query.bindValue(":user2", user2);
     if (query.exec()) {
         while (query.next()) {
             QJsonObject msg;
-            msg["from"] = query.value("from_nickname").toString();
+            QString fromNickname = query.value("from_nickname").toString();
+            QString toNickname = query.value("to_nickname").toString();
+            msg["from"] = fromNickname;
+            msg["to"] = toNickname;
 
             // 获取content，可能是JSON字符串
             QString contentStr = query.value("content").toString();
@@ -1825,13 +1832,14 @@ QJsonArray Server::getChatHistory(const QString &user1, const QString &user2) {
 
             if (!contentDoc.isNull() && contentDoc.isObject()) {
                 // 如果是有效的JSON对象，直接使用
-                msg["content"] = contentDoc.object();
+                msg["content"] = contentStr; // 保持原始JSON字符串格式
             } else {
                 // 如果不是有效的JSON，则将其包装为文本消息JSON
                 QJsonObject textMsg;
                 textMsg["type"] = "text";
                 textMsg["text"] = contentStr;
-                msg["content"] = textMsg;
+                // 将JSON转为字符串，然后赋值给content
+                msg["content"] = QString::fromUtf8(QJsonDocument(textMsg).toJson(QJsonDocument::Compact));
             }
 
             // 添加时间戳
@@ -2176,16 +2184,18 @@ bool Server::saveGroupChatMessage(int groupId, const QString &from, const QStrin
         QJsonObject textMsg;
         textMsg["type"] = "text";
         textMsg["text"] = content;
-        finalContent = QJsonDocument(textMsg).toJson(QJsonDocument::Compact);
+        finalContent = QString::fromUtf8(QJsonDocument(textMsg).toJson(QJsonDocument::Compact));
     } else {
         // 已经是JSON格式，直接使用
         finalContent = content;
     }
 
-    query.prepare("INSERT INTO group_messages (group_id, from_nickname, content) VALUES (?, ?, ?)");
+    QString timestamp = QDateTime::currentDateTime().toString(Qt::ISODate);
+    query.prepare("INSERT INTO group_messages (group_id, from_nickname, content, timestamp) VALUES (?, ?, ?, ?)");
     query.addBindValue(groupId);
     query.addBindValue(from);
     query.addBindValue(finalContent);
+    query.addBindValue(timestamp);
 
     if (!query.exec()) {
         qDebug() << "保存群聊消息失败：" << query.lastError().text();
@@ -2220,20 +2230,22 @@ QJsonArray Server::getGroupChatHistory(int groupId) {
         while (query.next()) {
             QJsonObject msg;
             msg["from"] = query.value("from_nickname").toString();
+            msg["group_id"] = groupId;
 
             // 获取content，可能是JSON字符串
             QString contentStr = query.value("content").toString();
             QJsonDocument contentDoc = QJsonDocument::fromJson(contentStr.toUtf8());
 
             if (!contentDoc.isNull() && contentDoc.isObject()) {
-                // 如果是有效的JSON对象，直接使用
-                msg["content"] = contentDoc.object();
+                // 如果是有效的JSON对象，直接使用原始字符串
+                msg["content"] = contentStr; // 保持原始JSON字符串格式
             } else {
                 // 如果不是有效的JSON，则将其包装为文本消息JSON
                 QJsonObject textMsg;
                 textMsg["type"] = "text";
                 textMsg["text"] = contentStr;
-                msg["content"] = textMsg;
+                // 将JSON转为字符串，然后赋值给content
+                msg["content"] = QString::fromUtf8(QJsonDocument(textMsg).toJson(QJsonDocument::Compact));
             }
 
             msg["timestamp"] = query.value("timestamp").toString();
@@ -2253,23 +2265,24 @@ bool Server::notifyGroupMessage(int groupId, const QString &from, const QString 
 
     // 检查content是否已经是JSON格式
     QJsonDocument contentDoc = QJsonDocument::fromJson(content.toUtf8());
-    QJsonValue contentValue;
+    QString finalContent;
 
     if (!contentDoc.isNull() && contentDoc.isObject()) {
-        // 如果是有效的JSON对象，直接使用
-        contentValue = contentDoc.object();
+        // 如果是有效的JSON对象，直接使用原始字符串
+        finalContent = content;
     } else {
         // 如果不是有效的JSON，则将其包装为文本消息JSON
         QJsonObject textMsg;
         textMsg["type"] = "text";
         textMsg["text"] = content;
-        contentValue = textMsg;
+        finalContent = QString::fromUtf8(QJsonDocument(textMsg).toJson(QJsonDocument::Compact));
     }
 
     QJsonObject msgData;
     msgData["group_id"] = groupId;
     msgData["from"] = from;
-    msgData["content"] = contentValue;
+    msgData["content"] = finalContent;
+    msgData["timestamp"] = QDateTime::currentDateTime().toString(Qt::ISODate);
 
     QByteArray message = QJsonDocument(MessageProtocol::createMessage(MessageType::GroupChat, msgData)).toJson();
 
