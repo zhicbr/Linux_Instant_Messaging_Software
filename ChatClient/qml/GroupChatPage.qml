@@ -406,7 +406,8 @@ Rectangle {
         property string title: "创建新群聊"
         modal: true
         width: 400
-        height: 400
+        height: 500  // 增加高度
+        padding: 0   // 移除默认内边距
 
         anchors.centerIn: parent
 
@@ -417,22 +418,160 @@ Rectangle {
             radius: 6
         }
 
-        Rectangle {
-            id: dialogHeader
-            width: parent.width
-            height: 50
-            color: theme.sidebarColor
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            spacing: 0
 
-            Text {
-                anchors.centerIn: parent
-                text: createGroupDialog.title
-                font.pixelSize: 16
-                font.bold: true
-                color: theme.primaryTextColor
+            // 对话框标题
+            Rectangle {
+                id: dialogHeader
+                Layout.fillWidth: true
+                Layout.preferredHeight: 50
+                color: theme.sidebarColor
+
+                Text {
+                    anchors.centerIn: parent
+                    text: createGroupDialog.title
+                    font.pixelSize: 16
+                    font.bold: true
+                    color: theme.primaryTextColor
+                }
+            }
+
+            // 内容区域
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.margins: 20
+                spacing: 15
+
+                // 群聊名称输入区域
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    Label {
+                        text: "群聊名称"
+                        font.bold: true
+                        color: theme.primaryTextColor
+                    }
+
+                    TextField {
+                        id: groupNameField
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 40
+                        placeholderText: "请输入群聊名称"
+                        font.pixelSize: 14
+                        color: theme.primaryTextColor
+                        placeholderTextColor: theme.secondaryTextColor
+
+                        background: Rectangle {
+                            color: theme.inputBackgroundColor
+                            border.color: groupNameField.activeFocus ? 
+                                theme.inputFocusBorderColor : theme.inputBorderColor
+                            border.width: 1
+                            radius: 4
+                        }
+                    }
+                }
+
+                // 成员选择区域
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    spacing: 8
+
+                    Label {
+                        text: "选择群成员"
+                        font.bold: true
+                        color: theme.primaryTextColor
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        color: theme.backgroundColor
+                        border.color: theme.borderColor
+                        border.width: 1
+                        radius: 4
+
+                        ScrollView {
+                            anchors.fill: parent
+                            anchors.margins: 1
+                            clip: true
+
+                            ListView {
+                                id: friendsCheckList
+                                model: ListModel { id: friendsCheckboxModel }
+                                
+                                delegate: CheckBox {
+                                    width: parent.width
+                                    height: 40
+                                    text: name
+                                    checked: model.checked
+                                    onCheckedChanged: friendsCheckboxModel.setProperty(index, "checked", checked)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 底部按钮区域
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 60
+                Layout.margins: 20
+                spacing: 10
+
+                Item { Layout.fillWidth: true }
+
+                Button {
+                    text: "取消"
+                    Layout.preferredWidth: 100
+                    Layout.preferredHeight: 36
+                    font.pixelSize: 14
+
+                    background: Rectangle {
+                        color: parent.pressed ? theme.secondaryButtonPressedColor : theme.secondaryButtonColor
+                        radius: 4
+                    }
+
+                    contentItem: Text {
+                        text: parent.text
+                        color: "white"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        font: parent.font
+                    }
+
+                    onClicked: createGroupDialog.reject()
+                }
+
+                Button {
+                    text: "创建群聊"
+                    Layout.preferredWidth: 100
+                    Layout.preferredHeight: 36
+                    font.pixelSize: 14
+
+                    background: Rectangle {
+                        color: parent.pressed ? theme.primaryButtonPressedColor : theme.primaryButtonColor
+                        radius: 4
+                    }
+
+                    contentItem: Text {
+                        text: parent.text
+                        color: "white"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        font: parent.font
+                    }
+
+                    onClicked: createGroupDialog.accept()
+                }
             }
         }
 
-        // 使用自定义函数代替onAccepted
         function accept() {
             // 获取选中的好友作为群成员
             let selectedMembers = [];
@@ -455,7 +594,6 @@ Rectangle {
             }
         }
 
-        // 使用自定义函数代替onRejected
         function reject() {
             groupNameField.text = "";
             // 重置选中状态
@@ -465,85 +603,6 @@ Rectangle {
             close();
         }
 
-        contentItem: Item {
-            anchors.fill: parent
-            anchors.topMargin: dialogHeader.height
-
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 15
-                spacing: 15
-
-                RowLayout {
-                    Layout.fillWidth: true
-
-                    Label {
-                        text: "群聊名称："
-                        Layout.preferredWidth: 80
-                        color: theme.primaryTextColor
-                    }
-
-                    TextField {
-                        id: groupNameField
-                        Layout.fillWidth: true
-                        placeholderText: "输入群聊名称"
-                    }
-                }
-
-                Label {
-                    text: "选择群成员："
-                    font.bold: true
-                    color: theme.primaryTextColor
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    border.color: "#DEE2E6"
-
-                    ScrollView {
-                        anchors.fill: parent
-                        clip: true
-
-                        ListView {
-                            id: friendsCheckList
-                            anchors.fill: parent
-                            model: ListModel { id: friendsCheckboxModel }
-
-                            delegate: CheckBox {
-                                text: name
-                                checked: model.checked
-                                onCheckedChanged: friendsCheckboxModel.setProperty(index, "checked", checked)
-                            }
-
-                            Component.onCompleted: {
-                                // 填充好友列表
-                                refreshFriendsList();
-                            }
-                        }
-                    }
-                }
-
-                // 添加按钮行
-                RowLayout {
-                    Layout.fillWidth: true
-                    Layout.alignment: Qt.AlignRight
-                    spacing: 10
-
-                    Button {
-                        text: "取消"
-                        onClicked: createGroupDialog.reject()
-                    }
-
-                    Button {
-                        text: "确定"
-                        onClicked: createGroupDialog.accept()
-                    }
-                }
-            }
-        }
-
-        // 在对话框打开时刷新好友列表
         onOpened: {
             refreshFriendsList();
         }
